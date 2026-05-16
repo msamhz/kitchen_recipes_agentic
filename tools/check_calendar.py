@@ -22,13 +22,21 @@ import os
 import sys
 from datetime import date, datetime, timezone
 
+import httplib2
+import requests as requests_lib
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+import google_auth_httplib2
 
 load_dotenv()
+
+# SSL bypass for corporate certificate chains
+_http_no_ssl = httplib2.Http(disable_ssl_certificate_validation=True)
+_requests_no_ssl = requests_lib.Session()
+_requests_no_ssl.verify = False
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
@@ -47,18 +55,20 @@ def get_calendar_service():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            creds.refresh(Request(session=_requests_no_ssl))
         else:
             if not os.path.exists(CREDENTIALS_PATH):
                 print(f"ERROR: credentials.json not found at {CREDENTIALS_PATH}")
                 print("Download it from Google Cloud Console > APIs & Services > Credentials")
                 sys.exit(1)
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
+            flow.oauth2session.verify = False
             creds = flow.run_local_server(port=0)
         with open(TOKEN_PATH, "w") as f:
             f.write(creds.to_json())
 
-    return build("calendar", "v3", credentials=creds)
+    authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=_http_no_ssl)
+    return build("calendar", "v3", http=authed_http)
 
 
 def check_wfh(target_date: date | None = None) -> bool:
