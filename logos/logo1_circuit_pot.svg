@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <radialGradient id="glow1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e94560" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#0f0f1a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="240" height="240" fill="#0f0f1a" rx="24"/>
+  <circle cx="120" cy="120" r="95" fill="url(#glow1)"/>
+
+  <!-- Pot body -->
+  <rect x="55" y="105" width="130" height="85" rx="14" fill="#1a1a2e" stroke="#e94560" stroke-width="3.5"/>
+
+  <!-- Pot handles -->
+  <path d="M55 125 Q32 125 32 140 Q32 155 55 155" fill="none" stroke="#e94560" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M185 125 Q208 125 208 140 Q208 155 185 155" fill="none" stroke="#e94560" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- Lid -->
+  <path d="M52 108 Q120 85 188 108" fill="none" stroke="#e94560" stroke-width="3.5" stroke-linecap="round"/>
+  <rect x="106" y="72" width="28" height="16" rx="8" fill="#e94560"/>
+
+  <!-- Circuit nodes inside pot -->
+  <circle cx="88"  cy="138" r="4" fill="#3a5a8a"/>
+  <circle cx="120" cy="152" r="4" fill="#e94560"/>
+  <circle cx="152" cy="138" r="4" fill="#3a5a8a"/>
+  <circle cx="104" cy="125" r="3" fill="#4caf50"/>
+  <circle cx="136" cy="125" r="3" fill="#4caf50"/>
+
+  <line x1="88"  y1="138" x2="104" y2="125" stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="104" y1="125" x2="120" y2="152" stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="120" y1="152" x2="136" y2="125" stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="136" y1="125" x2="152" y2="138" stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="88"  y1="138" x2="120" y2="152" stroke="#e94560" stroke-width="1"   opacity="0.4"/>
+  <line x1="152" y1="138" x2="120" y2="152" stroke="#e94560" stroke-width="1"   opacity="0.4"/>
+
+  <!-- Steam pulses -->
+  <path d="M95 104 Q90 94 95 84 Q100 74 95 64" fill="none" stroke="#e94560" stroke-width="2.2" stroke-linecap="round" opacity="0.5"/>
+  <path d="M120 104 Q115 93 120 82 Q125 71 120 60" fill="none" stroke="#e94560" stroke-width="2.2" stroke-linecap="round" opacity="0.7"/>
+  <path d="M145 104 Q140 94 145 84 Q150 74 145 64" fill="none" stroke="#e94560" stroke-width="2.2" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- Label -->
+  <text x="120" y="215" text-anchor="middle" fill="#e0e0f0" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="600" letter-spacing="2">KITCHEN AGENT</text>
+</svg>

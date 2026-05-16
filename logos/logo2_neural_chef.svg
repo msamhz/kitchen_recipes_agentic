@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <linearGradient id="hatgrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e94560"/>
+      <stop offset="100%" stop-color="#c0213f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="240" height="240" fill="#0f0f1a" rx="24"/>
+
+  <!-- Chef hat brim -->
+  <rect x="52" y="148" width="136" height="22" rx="6" fill="url(#hatgrad)"/>
+
+  <!-- Chef hat puff (main dome) -->
+  <path d="M72 150 Q72 95 120 88 Q168 95 168 150 Z" fill="#1a1a2e" stroke="#e94560" stroke-width="3"/>
+
+  <!-- Inner dome highlight -->
+  <path d="M82 148 Q82 105 120 99 Q158 105 158 148 Z" fill="none" stroke="#e94560" stroke-width="1" opacity="0.3"/>
+
+  <!-- Neural network nodes inside hat -->
+  <circle cx="100" cy="130" r="5" fill="#e94560"/>
+  <circle cx="120" cy="118" r="5" fill="#e94560"/>
+  <circle cx="140" cy="130" r="5" fill="#e94560"/>
+  <circle cx="110" cy="143" r="4" fill="#3a5a8a"/>
+  <circle cx="130" cy="143" r="4" fill="#3a5a8a"/>
+  <circle cx="120" cy="107" r="4" fill="#4caf50"/>
+  <circle cx="95"  cy="117" r="3" fill="#3a5a8a"/>
+  <circle cx="145" cy="117" r="3" fill="#3a5a8a"/>
+
+  <!-- Connections -->
+  <line x1="95"  y1="117" x2="100" y2="130" stroke="#e94560" stroke-width="1.5" opacity="0.7"/>
+  <line x1="100" y1="130" x2="120" y2="118" stroke="#e94560" stroke-width="1.5" opacity="0.7"/>
+  <line x1="120" y1="118" x2="140" y2="130" stroke="#e94560" stroke-width="1.5" opacity="0.7"/>
+  <line x1="145" y1="117" x2="140" y2="130" stroke="#e94560" stroke-width="1.5" opacity="0.7"/>
+  <line x1="120" y1="107" x2="120" y2="118" stroke="#4caf50" stroke-width="1.5" opacity="0.8"/>
+  <line x1="100" y1="130" x2="110" y2="143" stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="140" y1="130" x2="130" y2="143" stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="110" y1="143" x2="130" y2="143" stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="120" y1="118" x2="110" y2="143" stroke="#e94560" stroke-width="1"   opacity="0.4"/>
+  <line x1="120" y1="118" x2="130" y2="143" stroke="#e94560" stroke-width="1"   opacity="0.4"/>
+
+  <!-- Pulse rings on top node -->
+  <circle cx="120" cy="107" r="8"  fill="none" stroke="#4caf50" stroke-width="1" opacity="0.4"/>
+  <circle cx="120" cy="107" r="13" fill="none" stroke="#4caf50" stroke-width="1" opacity="0.2"/>
+
+  <!-- Label -->
+  <text x="120" y="205" text-anchor="middle" fill="#e0e0f0" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="600" letter-spacing="2">KITCHEN AGENT</text>
+  <text x="120" y="222" text-anchor="middle" fill="#a0a0b0" font-family="Inter,Arial,sans-serif" font-size="9" letter-spacing="3">AI POWERED</text>
+</svg>

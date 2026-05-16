@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <radialGradient id="centerglow" cx="50%" cy="55%" r="40%">
+      <stop offset="0%" stop-color="#e94560" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#0f0f1a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="240" height="240" fill="#0f0f1a" rx="24"/>
+  <circle cx="120" cy="130" r="80" fill="url(#centerglow)"/>
+
+  <!-- Fork handle -->
+  <rect x="115" y="140" width="10" height="62" rx="5" fill="#e94560"/>
+
+  <!-- Fork neck -->
+  <rect x="115" y="108" width="10" height="36" rx="3" fill="#e94560"/>
+
+  <!-- Fork tines (4) -->
+  <rect x="95"  y="62" width="6" height="52" rx="3" fill="#e94560"/>
+  <rect x="107" y="62" width="6" height="52" rx="3" fill="#e94560"/>
+  <rect x="119" y="62" width="6" height="52" rx="3" fill="#e94560"/>
+  <rect x="131" y="62" width="6" height="52" rx="3" fill="#e94560"/>
+
+  <!-- Tine-tip nodes -->
+  <circle cx="98"  cy="60" r="6" fill="#e94560" stroke="#0f0f1a" stroke-width="2"/>
+  <circle cx="110" cy="56" r="6" fill="#e94560" stroke="#0f0f1a" stroke-width="2"/>
+  <circle cx="122" cy="54" r="7" fill="#4caf50" stroke="#0f0f1a" stroke-width="2"/>
+  <circle cx="134" cy="56" r="6" fill="#e94560" stroke="#0f0f1a" stroke-width="2"/>
+
+  <!-- Network nodes radiating outward -->
+  <circle cx="68"  cy="72"  r="5" fill="#3a5a8a"/>
+  <circle cx="58"  cy="100" r="4" fill="#3a5a8a"/>
+  <circle cx="70"  cy="128" r="4" fill="#3a5a8a"/>
+  <circle cx="172" cy="72"  r="5" fill="#3a5a8a"/>
+  <circle cx="182" cy="100" r="4" fill="#3a5a8a"/>
+  <circle cx="170" cy="128" r="4" fill="#3a5a8a"/>
+  <circle cx="85"  cy="42"  r="4" fill="#3a5a8a"/>
+  <circle cx="155" cy="42"  r="4" fill="#3a5a8a"/>
+
+  <!-- Connections from tine tips to outer nodes -->
+  <line x1="98"  y1="60"  x2="68"  y2="72"  stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="98"  y1="60"  x2="85"  y2="42"  stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="68"  y1="72"  x2="58"  y2="100" stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="58"  y1="100" x2="70"  y2="128" stroke="#3a5a8a" stroke-width="1.5" opacity="0.6"/>
+  <line x1="134" y1="56"  x2="172" y2="72"  stroke="#3a5a8a" stroke-width="1.5" opacity="0.8"/>
+  <line x1="134" y1="56"  x2="155" y2="42"  stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="172" y1="72"  x2="182" y2="100" stroke="#3a5a8a" stroke-width="1.5" opacity="0.7"/>
+  <line x1="182" y1="100" x2="170" y2="128" stroke="#3a5a8a" stroke-width="1.5" opacity="0.6"/>
+
+  <!-- Cross-connections -->
+  <line x1="110" y1="56" x2="85"  y2="42"  stroke="#e94560" stroke-width="1" opacity="0.4"/>
+  <line x1="134" y1="56" x2="155" y2="42"  stroke="#e94560" stroke-width="1" opacity="0.4"/>
+  <line x1="68"  y1="72" x2="172" y2="72"  stroke="#e94560" stroke-width="1" opacity="0.15"/>
+
+  <!-- Central glow dot -->
+  <circle cx="122" cy="54" r="3" fill="white" opacity="0.8"/>
+
+  <!-- Label -->
+  <text x="120" y="218" text-anchor="middle" fill="#e0e0f0" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="600" letter-spacing="2">KITCHEN AGENT</text>
+</svg>

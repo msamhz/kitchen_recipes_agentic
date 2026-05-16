@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <radialGradient id="plategrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e1e35"/>
+      <stop offset="100%" stop-color="#0f0f1a"/>
+    </radialGradient>
+    <radialGradient id="lensinner" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e94560" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#0f0f1a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="240" height="240" fill="#0f0f1a" rx="24"/>
+
+  <!-- Plate outer ring -->
+  <circle cx="120" cy="118" r="82" fill="none" stroke="#e94560" stroke-width="3"/>
+
+  <!-- Plate inner ring -->
+  <circle cx="120" cy="118" r="66" fill="url(#plategrad)" stroke="#e94560" stroke-width="1.5" stroke-dasharray="4 3"/>
+
+  <!-- Camera lens aperture blades (6-blade) centered on plate -->
+  <circle cx="120" cy="118" r="34" fill="url(#lensinner)" stroke="#3a5a8a" stroke-width="2"/>
+
+  <!-- Aperture blades -->
+  <path d="M120 84 L132 104 L108 104 Z" fill="#3a5a8a" opacity="0.5"/>
+  <path d="M150 100 L130 112 L138 88 Z" fill="#3a5a8a" opacity="0.5"/>
+  <path d="M150 136 L128 126 L148 110 Z" fill="#3a5a8a" opacity="0.5"/>
+  <path d="M120 152 L108 132 L132 132 Z" fill="#3a5a8a" opacity="0.5"/>
+  <path d="M90 136 L110 124 L102 148 Z" fill="#3a5a8a" opacity="0.5"/>
+  <path d="M90 100 L112 110 L92 126 Z" fill="#3a5a8a" opacity="0.5"/>
+
+  <!-- Center lens iris -->
+  <circle cx="120" cy="118" r="16" fill="#1a1a2e" stroke="#e94560" stroke-width="2"/>
+  <circle cx="120" cy="118" r="9"  fill="#e94560" opacity="0.9"/>
+  <circle cx="120" cy="118" r="4"  fill="#0f0f1a"/>
+  <!-- Lens highlight -->
+  <circle cx="114" cy="112" r="3" fill="white" opacity="0.3"/>
+
+  <!-- Fork (left side of plate) -->
+  <rect x="50"  y="85"  width="5" height="68" rx="2.5" fill="#e0e0f0" opacity="0.7"/>
+  <rect x="44"  y="78"  width="4" height="28" rx="2" fill="#e0e0f0" opacity="0.7"/>
+  <rect x="56"  y="78"  width="4" height="28" rx="2" fill="#e0e0f0" opacity="0.7"/>
+  <path d="M44 78 Q44 68 52.5 68 Q61 68 61 78" fill="none" stroke="#e0e0f0" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- Knife (right side of plate) -->
+  <rect x="186" y="78"  width="5" height="75" rx="2.5" fill="#e0e0f0" opacity="0.7"/>
+  <path d="M186 78 Q186 60 191 58 Q196 60 191 78 Z" fill="#e0e0f0" opacity="0.7"/>
+
+  <!-- Scan tick marks on outer ring -->
+  <line x1="120" y1="36" x2="120" y2="44" stroke="#e94560" stroke-width="2" opacity="0.6"/>
+  <line x1="120" y1="192" x2="120" y2="200" stroke="#e94560" stroke-width="2" opacity="0.6"/>
+  <line x1="38" y1="118" x2="46" y2="118" stroke="#e94560" stroke-width="2" opacity="0.6"/>
+  <line x1="194" y1="118" x2="202" y2="118" stroke="#e94560" stroke-width="2" opacity="0.6"/>
+
+  <!-- Label -->
+  <text x="120" y="220" text-anchor="middle" fill="#e0e0f0" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="600" letter-spacing="2">KITCHEN AGENT</text>
+</svg>
