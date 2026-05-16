@@ -10,12 +10,14 @@ Usage:
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import os
 import sys
 
 import anthropic
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -111,6 +113,54 @@ def resolve_uncertain(description: str) -> str | None:
     return None
 
 
+async def identify_ingredients_async(image_path: str) -> dict:
+    print(f"[CV] Analyzing image (async): {image_path}")
+    image_data, media_type = encode_image(image_path)
+
+    async_client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = await async_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
+                    {"type": "text", "text": IDENTIFY_PROMPT},
+                ],
+            }
+        ],
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
+async def resolve_uncertain_async(description: str) -> str | None:
+    print(f"[CV] Resolving uncertain item (async): '{description}'")
+    async_client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    response = await async_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=128,
+        messages=[{"role": "user", "content": WEB_CLARIFY_PROMPT.format(description=description)}],
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        result = json.loads(raw.strip())
+        if result.get("confidence") in ("high", "medium"):
+            return result["resolved_name"]
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
 def upsert_ingredients(names: list[str], mode: str = "update"):
     """
     mode='update': only set in_stock=1 for detected items, leave others unchanged.
@@ -184,6 +234,53 @@ def run(image_path: str, mode: str = "update"):
     return confirmed_names
 
 
+async def run_async(image_path: str, mode: str = "update"):
+    if not os.path.exists(image_path):
+        print(f"ERROR: Image not found: {image_path}")
+        sys.exit(1)
+
+    init_db()
+
+    result = await identify_ingredients_async(image_path)
+    ingredients = result.get("ingredients", [])
+    uncertain = result.get("uncertain", [])
+
+    confirmed_names = []
+    to_resolve = []
+
+    for item in ingredients:
+        if item["confidence"] in ("high", "medium"):
+            confirmed_names.append(item["name"])
+            print(f"  [+] {item['name']} ({item['confidence']})")
+        else:
+            print(f"  [?] {item['name']} — low confidence, queued for resolution...")
+            to_resolve.append(item.get("notes", item["name"]))
+
+    for desc in uncertain:
+        print(f"  [?] Uncertain: '{desc}' — queued for resolution...")
+
+    all_to_resolve = to_resolve + list(uncertain)
+    if all_to_resolve:
+        print(f"[CV] Resolving {len(all_to_resolve)} uncertain item(s) in parallel...")
+        resolved_results = await asyncio.gather(
+            *[resolve_uncertain_async(desc) for desc in all_to_resolve]
+        )
+        for desc, resolved in zip(all_to_resolve, resolved_results):
+            if resolved:
+                confirmed_names.append(resolved)
+                print(f"      -> '{desc}' resolved to: {resolved}")
+            else:
+                print(f"      -> '{desc}' skipped (could not resolve)")
+
+    if confirmed_names:
+        upsert_ingredients(confirmed_names, mode=mode)
+        print(f"\n[DB] Upserted {len(confirmed_names)} ingredients (mode={mode})")
+    else:
+        print("\n[DB] No ingredients to save.")
+
+    return confirmed_names
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CV to Ingredients DB")
     parser.add_argument("--image", required=True, help="Path to kitchen photo")
@@ -194,4 +291,4 @@ if __name__ == "__main__":
         help="update: add detected items; restock: replace entire stock with what's in photo",
     )
     args = parser.parse_args()
-    run(args.image, args.mode)
+    asyncio.run(run_async(args.image, args.mode))

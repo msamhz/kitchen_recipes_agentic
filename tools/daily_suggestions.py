@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import os
 import sys
 
@@ -18,6 +19,29 @@ from check_calendar import check_wfh
 from match_recipes import match_recipes
 from update_stock import mark_recipe_cooked
 from db_init import get_connection
+
+
+async def _gather_data(skip_calendar: bool, force_wfh: bool) -> tuple[bool, dict]:
+    if force_wfh:
+        print("[Calendar] Forced WFH=True")
+        return True, match_recipes()
+    if skip_calendar:
+        print("[Calendar] Skipped — treating as non-WFH")
+        return False, match_recipes()
+
+    async def _safe_check_wfh():
+        try:
+            return await asyncio.to_thread(check_wfh)
+        except Exception as e:
+            print(f"[Calendar] Error: {e}")
+            print("[Calendar] Falling back to non-WFH mode")
+            return False
+
+    wfh, results = await asyncio.gather(
+        _safe_check_wfh(),
+        asyncio.to_thread(match_recipes),
+    )
+    return wfh, results
 
 
 def display_recipes(results: dict, wfh: bool) -> list[dict]:
@@ -72,23 +96,8 @@ def get_recipe_instructions(recipe_id: int) -> str:
 
 
 def run(skip_calendar: bool = False, force_wfh: bool = False):
-    # Step 1: Check calendar
-    if force_wfh:
-        wfh = True
-        print("[Calendar] Forced WFH=True")
-    elif skip_calendar:
-        wfh = False
-        print("[Calendar] Skipped — treating as non-WFH")
-    else:
-        try:
-            wfh = check_wfh()
-        except Exception as e:
-            print(f"[Calendar] Error: {e}")
-            print("[Calendar] Falling back to non-WFH mode")
-            wfh = False
-
-    # Step 2: Match recipes (deterministic)
-    results = match_recipes()
+    # Steps 1+2: Calendar check and recipe matching run in parallel
+    wfh, results = asyncio.run(_gather_data(skip_calendar, force_wfh))
 
     # Step 3: Display filtered list
     options = display_recipes(results, wfh=wfh)
