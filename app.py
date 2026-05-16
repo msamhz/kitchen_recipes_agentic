@@ -4,7 +4,7 @@ Kitchen Agent — NiceGUI Frontend
 Central UI for all kitchen agent tools.
 
 Run with:  .venv/Scripts/python app.py
-Opens at:  http://localhost:8080
+Opens at:  http://localhost:8181
 """
 
 import asyncio
@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tools"))
 from nicegui import ui, events
 
 from db_init import init_db, get_connection
-from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, upsert_ingredients
+from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, deduplicate_async, upsert_ingredients
 from match_recipes import match_recipes
 from update_stock import mark_recipe_cooked, mark_ingredients
 from add_recipe import run as add_recipe_run
@@ -79,13 +79,13 @@ def scan_tab():
                 file_list = ui.column().classes("w-full gap-1 mt-2")
 
                 async def handle_upload(e: events.UploadEventArguments):
-                    dest = TMP_DIR / e.name
-                    dest.write_bytes(e.content.read())
+                    dest = TMP_DIR / e.file.name
+                    dest.write_bytes(await e.file.read())
                     uploaded_paths.append(str(dest))
                     with file_list:
                         with ui.row().classes("items-center gap-2"):
                             ui.icon("image", size="1rem").style(f"color: {GREEN};")
-                            ui.label(e.name).style("color:#e0e0f0; font-size:0.85rem;")
+                            ui.label(e.file.name).style("color:#e0e0f0; font-size:0.85rem;")
 
                 ui.upload(
                     multiple=True,
@@ -109,7 +109,8 @@ def scan_tab():
                 scan_status = ui.label("").style(MUTED)
 
         # ── Results panel (hidden until scan completes) ──────────────────────
-        results_panel = ui.card().style(CARD + " display:none;").classes("w-full")
+        results_panel = ui.card().style(CARD).classes("w-full")
+        results_panel.set_visibility(False)
         with results_panel:
             with ui.row().classes("items-center justify-between w-full mb-2"):
                 ui.label("Review Detected Ingredients").style(TEXT + " font-weight:600;")
@@ -147,13 +148,13 @@ def scan_tab():
                     return
                 upsert_ingredients(final, mode=mode.value)
                 ui.notify(f"Saved {len(final)} ingredient(s)!", color="positive")
-                results_panel.style(CARD + " display:none;")
+                results_panel.set_visibility(False)
                 uploaded_paths.clear(); checkbox_refs.clear(); extra_items.clear()
                 checklist_col.clear(); extras_col.clear()
                 scan_status.set_text("")
 
             with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("Cancel", on_click=lambda: results_panel.style(CARD + " display:none;")).props("flat").style("color:#ff6b6b;")
+                ui.button("Cancel", on_click=lambda: results_panel.set_visibility(False)).props("flat").style("color:#ff6b6b;")
                 ui.button("Confirm & Save", icon="check", on_click=on_confirm).props("unelevated").style(
                     f"background:{ACCENT}; color:white; border-radius:8px;"
                 )
@@ -204,6 +205,15 @@ def scan_tab():
 
                 final_candidates = sorted(set(confirmed))
 
+                # Deduplicate against existing DB names (merges near-identical detected names)
+                scan_status.set_text("Deduplicating ingredient names...")
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM ingredients")
+                existing_names = [r["name"] for r in cur.fetchall()]
+                conn.close()
+                final_candidates = await deduplicate_async(final_candidates, existing_names)
+
                 with checklist_col:
                     for name in final_candidates:
                         cb = ui.checkbox(name, value=True).style("color:#e0e0f0;")
@@ -211,7 +221,7 @@ def scan_tab():
                         checkbox_refs[name] = cb
 
                 count_lbl.set_text(f"{len(final_candidates)} ingredient(s) detected")
-                results_panel.style(CARD)
+                results_panel.set_visibility(True)
                 scan_status.set_text(f"Done — review and confirm below")
 
             except Exception as e:
@@ -329,12 +339,10 @@ def recipes_tab():
 
 def today_tab():
     today = date.today()
-    monday = today - timedelta(days=today.weekday())
-    week_days = [monday + timedelta(days=i) for i in range(7)]
-    DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    week_days = [today + timedelta(days=i) for i in range(7)]
 
     selected_date = {"value": today}
-    wfh_state = {"value": False}
+    wfh_cache: dict[date, bool] = {}
 
     with ui.column().classes("w-full gap-4"):
         section_heading("Today's Meals", "today")
@@ -343,40 +351,48 @@ def today_tab():
         with ui.card().style(CARD).classes("w-full"):
             ui.label("Select day").style(MUTED)
 
-            day_buttons: dict[date, ui.button] = {}
-
             def style_day_btn(d: date):
                 is_selected = d == selected_date["value"]
-                is_today = d == today
-                if is_selected:
-                    return f"background:{ACCENT}; color:white; border-radius:8px; min-width:52px;"
-                elif is_today:
-                    return f"background:#2a2a4a; color:{ACCENT}; border-radius:8px; min-width:52px; border:1px solid {ACCENT};"
+                wfh = wfh_cache.get(d)
+                if wfh is True:
+                    color, bg_dim = GREEN, "#1e3a2a"
+                elif wfh is False:
+                    color, bg_dim = AMBER, "#3a2e1a"
                 else:
-                    return "background:#2a2a4a; color:#a0a0b0; border-radius:8px; min-width:52px;"
+                    color, bg_dim = BLUE, "#2a2a4a"
+                if is_selected:
+                    return f"background:{color}; color:white; border-radius:8px; min-width:56px; font-weight:700;"
+                else:
+                    return f"background:{bg_dim}; color:{color}; border-radius:8px; min-width:56px; border:1px solid {color}66;"
 
             async def select_day(d: date):
                 selected_date["value"] = d
-                # Re-style all buttons
-                for dd, btn in day_buttons.items():
-                    btn.style(style_day_btn(dd))
-                await check_and_load(d)
+                day_buttons_row.refresh()
+                wfh = wfh_cache.get(d)
+                if wfh is not None:
+                    wfh_toggle.set_value(wfh)
+                    day_label = "today" if d == today else d.strftime("%a %d %b")
+                    cal_lbl.set_text(f"{'WFH' if wfh else 'Office'} — {day_label}")
+                load_suggestions()
 
-            with ui.row().classes("gap-2 flex-wrap"):
-                for i, d in enumerate(week_days):
-                    label = f"{DAY_NAMES[i]}\n{d.day}"
-                    btn = ui.button(label, on_click=lambda _, day=d: asyncio.ensure_future(select_day(day)))
-                    btn.style(style_day_btn(d))
-                    btn.props("unelevated")
-                    day_buttons[d] = btn
+            @ui.refreshable
+            def day_buttons_row():
+                with ui.row().classes("gap-2 flex-wrap"):
+                    for d in week_days:
+                        (
+                            ui.button(f"{d.strftime('%a')}\n{d.day}", on_click=lambda day=d: select_day(day))
+                            .style(style_day_btn(d))
+                            .props("unelevated")
+                        )
+
+            day_buttons_row()
 
             ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
 
-            # WFH status row
             with ui.row().classes("items-center gap-4 flex-wrap"):
                 wfh_toggle = ui.switch("WFH", value=False).style("color:#e0e0f0;")
-                wfh_toggle.on_value_change(lambda e: wfh_state.update({"value": e.value}) or load_suggestions())
-                cal_lbl = ui.label("Checking calendar...").style(MUTED)
+                wfh_toggle.on_value_change(lambda e: load_suggestions())
+                cal_lbl = ui.label("Checking calendar for the week...").style(MUTED)
 
         # ── Suggestions ──────────────────────────────────────────────────────
         suggestions_col = ui.column().classes("w-full gap-3")
@@ -409,24 +425,25 @@ def today_tab():
                         else:
                             ui.label("Nothing missing — you're fully stocked!").style(MUTED)
 
-        # ── Calendar check + auto-load ────────────────────────────────────────
-        async def check_and_load(target: date):
-            cal_lbl.set_text("Checking calendar...")
-            if CALENDAR_AVAILABLE:
-                try:
-                    is_wfh = await asyncio.to_thread(check_wfh, target)
-                    wfh_toggle.set_value(is_wfh)
-                    wfh_state["value"] = is_wfh
-                    day_label = "today" if target == today else target.strftime("%a %d %b")
-                    cal_lbl.set_text(f"{'WFH' if is_wfh else 'Office'} — {day_label}")
-                except Exception:
-                    cal_lbl.set_text("Calendar unavailable — toggle manually")
-            else:
+        # ── Parallel calendar check for all 7 days ───────────────────────────
+        async def check_all_days():
+            if not CALENDAR_AVAILABLE:
                 cal_lbl.set_text("No calendar — toggle WFH manually")
+                load_suggestions()
+                return
+            for d in week_days:
+                try:
+                    result = await asyncio.to_thread(check_wfh, d)
+                    wfh_cache[d] = result
+                    day_buttons_row.refresh()
+                    if d == today:
+                        wfh_toggle.set_value(result)
+                        cal_lbl.set_text(f"{'WFH' if result else 'Office'} — today")
+                except Exception as e:
+                    print(f"[Calendar] Error checking {d}: {e}")
             load_suggestions()
 
-        # Auto-run on page load
-        ui.timer(0.5, lambda: asyncio.ensure_future(check_and_load(today)), once=True)
+        ui.timer(0.5, check_all_days, once=True)
 
 
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
@@ -498,13 +515,15 @@ def stock_tab():
 
                         if in_s:
                             ui.label(f"IN STOCK  ({len(in_s)})").style(f"color:{GREEN}; font-size:0.78rem; font-weight:700; margin-top:0.25rem;")
-                            for r in in_s:
-                                _ingredient_row(r, True, load_stock)
+                            with ui.column().classes("w-full gap-1").style("max-height:260px; overflow-y:auto;"):
+                                for r in in_s:
+                                    _ingredient_row(r, True, load_stock)
 
                         if out_s:
                             ui.label(f"OUT OF STOCK  ({len(out_s)})").style("color:#ff6b6b; font-size:0.78rem; font-weight:700; margin-top:0.75rem;")
-                            for r in out_s:
-                                _ingredient_row(r, False, load_stock)
+                            with ui.column().classes("w-full gap-1").style("max-height:200px; overflow-y:auto;"):
+                                for r in out_s:
+                                    _ingredient_row(r, False, load_stock)
 
                 # Add manually
                 ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
@@ -619,7 +638,7 @@ def main_page():
 
 ui.run(
     title="Kitchen Agent",
-    port=8080,
+    port=8181,
     reload=False,
     show=True,
     dark=True,

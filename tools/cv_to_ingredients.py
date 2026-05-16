@@ -131,6 +131,53 @@ async def identify_ingredients_async(image_path: str) -> dict:
     return json.loads(raw.strip())
 
 
+DEDUP_PROMPT = """You are deduplicating a kitchen ingredient list before saving to a database.
+
+Newly detected ingredients:
+{candidates}
+
+Ingredients already in the database (prefer these names if same ingredient):
+{existing}
+
+Rules:
+- Merge items that are clearly the same physical ingredient (e.g. "sesame oil" and "sesame oil (second bottle)" → "sesame oil")
+- Only merge when you are highly confident — different brands of the same sauce are the SAME ingredient
+- If a DB name matches a detected item, use the DB name as the canonical name
+- Keep all genuinely distinct ingredients separate
+- Return the final deduplicated list as a JSON array of strings
+
+Return ONLY: {{"ingredients": ["name1", "name2", ...]}}
+"""
+
+
+async def deduplicate_async(candidates: list[str], existing: list[str]) -> list[str]:
+    if len(candidates) <= 1:
+        return candidates
+
+    response = await async_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": DEDUP_PROMPT.format(
+                candidates=json.dumps(candidates),
+                existing=json.dumps(existing),
+            ),
+        }],
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        data = json.loads(raw.strip())
+        result = [n.strip().lower() for n in data.get("ingredients", []) if n.strip()]
+        return result if result else candidates
+    except (json.JSONDecodeError, AttributeError):
+        return candidates
+
+
 async def resolve_uncertain_async(description: str) -> str | None:
     print(f"[CV] Resolving uncertain item (async): '{description}'")
     response = await async_client.messages.create(

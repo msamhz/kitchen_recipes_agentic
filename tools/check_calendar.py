@@ -33,8 +33,9 @@ import google_auth_httplib2
 
 load_dotenv()
 
-# SSL bypass for corporate certificate chains
-_http_no_ssl = httplib2.Http(disable_ssl_certificate_validation=True)
+# SSL bypass for corporate certificate chains.
+# _requests_no_ssl is only used for token refresh (single-threaded), so a session is fine.
+# Http objects are NOT thread-safe — always create a fresh one per call (see get_calendar_service).
 _requests_no_ssl = requests_lib.Session()
 _requests_no_ssl.verify = False
 
@@ -67,7 +68,8 @@ def get_calendar_service():
         with open(TOKEN_PATH, "w") as f:
             f.write(creds.to_json())
 
-    authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=_http_no_ssl)
+    http = httplib2.Http(disable_ssl_certificate_validation=True)
+    authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
     return build("calendar", "v3", http=authed_http)
 
 
