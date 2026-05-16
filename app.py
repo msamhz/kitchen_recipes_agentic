@@ -10,6 +10,7 @@ Opens at:  http://localhost:8080
 import asyncio
 import os
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tools"))
@@ -327,38 +328,57 @@ def recipes_tab():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def today_tab():
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    week_days = [monday + timedelta(days=i) for i in range(7)]
+    DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    selected_date = {"value": today}
+    wfh_state = {"value": False}
+
     with ui.column().classes("w-full gap-4"):
         section_heading("Today's Meals", "today")
 
-        # Controls row
+        # ── Week date selector ───────────────────────────────────────────────
         with ui.card().style(CARD).classes("w-full"):
-            with ui.row().classes("items-center gap-4 flex-wrap"):
-                wfh_toggle = ui.switch("WFH today", value=False).style("color:#e0e0f0;")
+            ui.label("Select day").style(MUTED)
 
-                if CALENDAR_AVAILABLE:
-                    cal_btn = ui.button("Check Calendar", icon="event").props("flat unelevated").style(f"color:{BLUE};")
-                    cal_lbl = ui.label("").style(MUTED)
+            day_buttons: dict[date, ui.button] = {}
 
-                    async def check_cal():
-                        cal_btn.disable()
-                        cal_lbl.set_text("Checking...")
-                        try:
-                            is_wfh = await asyncio.to_thread(check_wfh)
-                            wfh_toggle.value = is_wfh
-                            cal_lbl.set_text("WFH" if is_wfh else "Office day")
-                        except Exception as e:
-                            cal_lbl.set_text("Calendar unavailable — use toggle")
-                        finally:
-                            cal_btn.enable()
-
-                    cal_btn.on("click", check_cal)
+            def style_day_btn(d: date):
+                is_selected = d == selected_date["value"]
+                is_today = d == today
+                if is_selected:
+                    return f"background:{ACCENT}; color:white; border-radius:8px; min-width:52px;"
+                elif is_today:
+                    return f"background:#2a2a4a; color:{ACCENT}; border-radius:8px; min-width:52px; border:1px solid {ACCENT};"
                 else:
-                    ui.label("Calendar unavailable (no credentials.json) — use toggle").style(MUTED)
+                    return "background:#2a2a4a; color:#a0a0b0; border-radius:8px; min-width:52px;"
 
-                ui.button("Get Suggestions", icon="restaurant", on_click=lambda: load_suggestions()).props("unelevated").style(
-                    f"background:{BLUE}; color:white; border-radius:8px;"
-                )
+            async def select_day(d: date):
+                selected_date["value"] = d
+                # Re-style all buttons
+                for dd, btn in day_buttons.items():
+                    btn.style(style_day_btn(dd))
+                await check_and_load(d)
 
+            with ui.row().classes("gap-2 flex-wrap"):
+                for i, d in enumerate(week_days):
+                    label = f"{DAY_NAMES[i]}\n{d.day}"
+                    btn = ui.button(label, on_click=lambda _, day=d: asyncio.ensure_future(select_day(day)))
+                    btn.style(style_day_btn(d))
+                    btn.props("unelevated")
+                    day_buttons[d] = btn
+
+            ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+
+            # WFH status row
+            with ui.row().classes("items-center gap-4 flex-wrap"):
+                wfh_toggle = ui.switch("WFH", value=False).style("color:#e0e0f0;")
+                wfh_toggle.on_value_change(lambda e: wfh_state.update({"value": e.value}) or load_suggestions())
+                cal_lbl = ui.label("Checking calendar...").style(MUTED)
+
+        # ── Suggestions ──────────────────────────────────────────────────────
         suggestions_col = ui.column().classes("w-full gap-3")
 
         def load_suggestions():
@@ -367,33 +387,46 @@ def today_tab():
             wfh = wfh_toggle.value
 
             with suggestions_col:
-                # Can cook now
                 with ui.column().classes("w-full gap-2"):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("check_circle", size="1.2rem").style(f"color:{GREEN};")
                         ui.label(f"Cook Now  ({len(results['can_cook'])})").style(f"color:{GREEN}; font-weight:700;")
-
                     if results["can_cook"]:
                         for r in results["can_cook"]:
                             _recipe_card(r, cookable=True, refresh_fn=load_suggestions)
                     else:
                         ui.label("No cookable recipes — scan your kitchen or add recipes.").style(MUTED)
 
-                # Can shop (WFH only)
                 if wfh:
                     ui.separator().style("background:#2a2a4a;")
                     with ui.column().classes("w-full gap-2"):
                         with ui.row().classes("items-center gap-2"):
                             ui.icon("shopping_cart", size="1.2rem").style(f"color:{AMBER};")
                             ui.label(f"Can Cook If You Shop  ({len(results['can_shop'])})").style(f"color:{AMBER}; font-weight:700;")
-
                         if results["can_shop"]:
                             for r in results["can_shop"]:
                                 _recipe_card(r, cookable=False, refresh_fn=load_suggestions)
                         else:
                             ui.label("Nothing missing — you're fully stocked!").style(MUTED)
 
-        load_suggestions()
+        # ── Calendar check + auto-load ────────────────────────────────────────
+        async def check_and_load(target: date):
+            cal_lbl.set_text("Checking calendar...")
+            if CALENDAR_AVAILABLE:
+                try:
+                    is_wfh = await asyncio.to_thread(check_wfh, target)
+                    wfh_toggle.set_value(is_wfh)
+                    wfh_state["value"] = is_wfh
+                    day_label = "today" if target == today else target.strftime("%a %d %b")
+                    cal_lbl.set_text(f"{'WFH' if is_wfh else 'Office'} — {day_label}")
+                except Exception:
+                    cal_lbl.set_text("Calendar unavailable — toggle manually")
+            else:
+                cal_lbl.set_text("No calendar — toggle WFH manually")
+            load_suggestions()
+
+        # Auto-run on page load
+        ui.timer(0.5, lambda: asyncio.ensure_future(check_and_load(today)), once=True)
 
 
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
