@@ -7,3 +7,20 @@ node_modules
 # Generated files
 .psci
 output
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets
+.env
+credentials.json
+token.json
+
+# Database (local state — not shared)
+kitchen.db
+
+# Temp files
+.tmp/

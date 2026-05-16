@@ -1,0 +1,53 @@
+"""
+Initialize the kitchen.db SQLite database with all required tables.
+Run once to set up, safe to re-run (CREATE TABLE IF NOT EXISTS).
+"""
+
+import sqlite3
+import os
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "kitchen.db")
+
+
+def get_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.executescript("""
+        CREATE TABLE IF NOT EXISTS ingredients (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+            in_stock    INTEGER NOT NULL DEFAULT 1,  -- 1 = in stock, 0 = out
+            last_updated TEXT   NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS recipes (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+            instructions TEXT    NOT NULL,
+            source       TEXT,
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS recipe_ingredients (
+            recipe_id     INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+            ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+            is_optional   INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (recipe_id, ingredient_id)
+        );
+    """)
+
+    conn.commit()
+    conn.close()
+    print(f"Database initialized at: {os.path.abspath(DB_PATH)}")
+
+
+if __name__ == "__main__":
+    init_db()
