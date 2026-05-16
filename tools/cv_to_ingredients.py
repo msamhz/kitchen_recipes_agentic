@@ -16,16 +16,9 @@ import json
 import os
 import sys
 
-import anthropic
-from anthropic import AsyncAnthropic
-from dotenv import load_dotenv
-
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
-
-load_dotenv()
-
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+from clients import sync_client as client, async_client
 
 IDENTIFY_PROMPT = """You are a kitchen inventory assistant with excellent food recognition skills.
 
@@ -117,7 +110,6 @@ async def identify_ingredients_async(image_path: str) -> dict:
     print(f"[CV] Analyzing image (async): {image_path}")
     image_data, media_type = encode_image(image_path)
 
-    async_client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     response = await async_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,
@@ -141,7 +133,6 @@ async def identify_ingredients_async(image_path: str) -> dict:
 
 async def resolve_uncertain_async(description: str) -> str | None:
     print(f"[CV] Resolving uncertain item (async): '{description}'")
-    async_client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     response = await async_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=128,

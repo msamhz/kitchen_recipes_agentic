@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, upsert_ingredients
 from db_init import init_db
+from ui_confirm_ingredients import run_confirmation_ui
 
 CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
 
@@ -83,13 +84,22 @@ async def scan_kitchen(image_paths: list[str], mode: str = "update"):
             else:
                 print(f"      -> '{desc}' skipped")
 
-    if confirmed_names:
-        upsert_ingredients(confirmed_names, mode=mode)
-        print(f"\n[SCAN] Summary: {len(image_paths)} image(s), {len(confirmed_names)} ingredient(s) saved (mode={mode})")
-    else:
-        print("\n[DB] No ingredients to save.")
+    if not confirmed_names:
+        print("\n[SCAN] No ingredients detected to confirm.")
+        return []
 
-    return confirmed_names
+    print(f"\n[SCAN] CV complete — {len(confirmed_names)} candidate(s). Opening confirmation UI...")
+
+    # Human-in-the-loop: user reviews, unchecks wrong items, adds missing ones
+    final_names = run_confirmation_ui(confirmed_names, mode=mode)
+
+    if final_names:
+        upsert_ingredients(final_names, mode=mode)
+        print(f"[SCAN] Done: {len(final_names)} ingredient(s) saved (mode={mode})")
+    else:
+        print("[SCAN] Cancelled — DB not updated.")
+
+    return final_names
 
 
 if __name__ == "__main__":

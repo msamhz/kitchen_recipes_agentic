@@ -15,17 +15,12 @@ import json
 import os
 import sys
 
-import anthropic
 import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
-
-load_dotenv()
-
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+from clients import sync_client as client
 
 PARSE_PROMPT = """You are a recipe parser. Extract the recipe from the text below.
 
