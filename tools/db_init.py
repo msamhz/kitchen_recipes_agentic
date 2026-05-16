@@ -20,11 +20,14 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ingredients'")
+    fresh = cur.fetchone() is None
+
     cur.executescript("""
         CREATE TABLE IF NOT EXISTS ingredients (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            in_stock    INTEGER NOT NULL DEFAULT 1,  -- 1 = in stock, 0 = out
+            in_stock    INTEGER NOT NULL DEFAULT 1,
             last_updated TEXT   NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -46,7 +49,8 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print(f"Database initialized at: {os.path.abspath(DB_PATH)}")
+    if fresh:
+        print(f"[DB] Created new database at: {os.path.abspath(DB_PATH)}")
 
 
 if __name__ == "__main__":
