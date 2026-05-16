@@ -84,22 +84,7 @@ async def scan_kitchen(image_paths: list[str], mode: str = "update"):
             else:
                 print(f"      -> '{desc}' skipped")
 
-    if not confirmed_names:
-        print("\n[SCAN] No ingredients detected to confirm.")
-        return []
-
-    print(f"\n[SCAN] CV complete — {len(confirmed_names)} candidate(s). Opening confirmation UI...")
-
-    # Human-in-the-loop: user reviews, unchecks wrong items, adds missing ones
-    final_names = run_confirmation_ui(confirmed_names, mode=mode)
-
-    if final_names:
-        upsert_ingredients(final_names, mode=mode)
-        print(f"[SCAN] Done: {len(final_names)} ingredient(s) saved (mode={mode})")
-    else:
-        print("[SCAN] Cancelled — DB not updated.")
-
-    return final_names
+    return confirmed_names  # caller handles UI + DB write
 
 
 if __name__ == "__main__":
@@ -111,5 +96,26 @@ if __name__ == "__main__":
         default="update",
         help="update: add detected items; restock: replace entire stock with what's in photos",
     )
+    parser.add_argument("--no-ui", action="store_true", help="Skip confirmation UI and save directly")
     args = parser.parse_args()
-    asyncio.run(scan_kitchen(args.images, args.mode))
+
+    # Step 1: async CV detection (completes before any event loop conflict)
+    candidates = asyncio.run(scan_kitchen(args.images, args.mode))
+
+    if not candidates:
+        print("[SCAN] No ingredients detected.")
+        sys.exit(0)
+
+    if args.no_ui:
+        # Skip UI, write directly
+        upsert_ingredients(candidates, mode=args.mode)
+        print(f"[SCAN] Done: {len(candidates)} ingredient(s) saved (mode={args.mode})")
+    else:
+        # Step 2: NiceGUI confirmation UI runs in its own event loop (outside asyncio.run)
+        print(f"\n[SCAN] CV complete — {len(candidates)} candidate(s). Opening confirmation UI...")
+        final_names = run_confirmation_ui(candidates, mode=args.mode)
+        if final_names:
+            upsert_ingredients(final_names, mode=args.mode)
+            print(f"[SCAN] Done: {len(final_names)} ingredient(s) saved (mode={args.mode})")
+        else:
+            print("[SCAN] Cancelled — DB not updated.")
