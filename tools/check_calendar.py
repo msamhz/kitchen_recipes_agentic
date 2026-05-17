@@ -20,7 +20,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 
 import httplib2
 import requests as requests_lib
@@ -79,8 +79,11 @@ def check_wfh(target_date: date | None = None) -> bool:
 
     service = get_calendar_service()
 
-    time_min = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-    time_max = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+    # Use local timezone boundaries so that all-day events on adjacent dates
+    # (which Google stores as local midnight) don't bleed into the wrong day.
+    local_tz = datetime.now().astimezone().tzinfo
+    time_min = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=local_tz).isoformat()
+    time_max = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59, tzinfo=local_tz).isoformat()
 
     events_result = (
         service.events()
