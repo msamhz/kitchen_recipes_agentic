@@ -26,7 +26,7 @@ def match_recipes() -> dict:
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, name FROM recipes ORDER BY name")
+    cur.execute("SELECT id, name, difficulty, prep_time FROM recipes ORDER BY name")
     recipes = cur.fetchall()
 
     can_cook = []
@@ -71,12 +71,15 @@ def match_recipes() -> dict:
             i["name"] for i in ingredients if i["in_stock"]
         ]
 
+        meta = {"difficulty": recipe["difficulty"], "prep_time": recipe["prep_time"]}
+
         if not missing_required:
             can_cook.append({
                 "id": rid,
                 "name": rname,
                 "have": have,
                 "missing_optional": missing_optional,
+                **meta,
             })
         else:
             can_shop.append({
@@ -85,6 +88,7 @@ def match_recipes() -> dict:
                 "have": have,
                 "missing_required": missing_required,
                 "missing_optional": missing_optional,
+                **meta,
             })
 
     conn.close()

@@ -53,6 +53,16 @@ def init_db():
         );
     """)
 
+    # Column migrations — safe to re-run (SQLite has no ADD COLUMN IF NOT EXISTS)
+    for sql in [
+        "ALTER TABLE recipes ADD COLUMN difficulty TEXT",
+        "ALTER TABLE recipes ADD COLUMN prep_time TEXT",
+    ]:
+        try:
+            cur.execute(sql)
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
     if fresh:

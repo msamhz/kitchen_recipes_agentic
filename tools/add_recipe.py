@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
@@ -50,6 +51,31 @@ Recipe text:
 ---
 {text}
 ---
+"""
+
+
+RATE_PROMPT = """You are rating a recipe for a kitchen assistant app.
+
+Recipe name: {name}
+Instructions:
+{instructions}
+
+Determine:
+1. difficulty — easy | medium | hard
+   easy: few steps, no special technique, beginner-friendly
+   medium: multiple steps, some timing or technique needed
+   hard: advanced technique, complex steps, requires experience
+
+2. prep_time — under_10 | 10_to_20 | over_20
+   Active hands-on preparation time only (exclude passive time like marinating or long simmering).
+   under_10: less than 10 minutes
+   10_to_20: 10 to 20 minutes
+   over_20: more than 20 minutes
+
+If the text doesn't provide enough detail, use your knowledge of this type of dish to estimate.
+
+Return ONLY valid JSON, no markdown:
+{{"difficulty": "easy|medium|hard", "prep_time": "under_10|10_to_20|over_20"}}
 """
 
 
@@ -106,6 +132,32 @@ def parse_recipe(text: str, source: str | None = None) -> dict:
     return recipe
 
 
+def rate_recipe(text: str, name: str = "") -> dict:
+    print("[Claude] Rating difficulty and prep time...")
+    # Use first 4000 chars of instructions — enough for rating
+    instructions = text[:4000]
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=128,
+        messages=[{"role": "user", "content": RATE_PROMPT.format(name=name, instructions=instructions)}],
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        result = json.loads(raw.strip())
+        valid_diff = {"easy", "medium", "hard"}
+        valid_time = {"under_10", "10_to_20", "over_20"}
+        return {
+            "difficulty": result.get("difficulty") if result.get("difficulty") in valid_diff else None,
+            "prep_time": result.get("prep_time") if result.get("prep_time") in valid_time else None,
+        }
+    except (json.JSONDecodeError, AttributeError):
+        return {"difficulty": None, "prep_time": None}
+
+
 def save_recipe(recipe: dict) -> int:
     conn = get_connection()
     cur = conn.cursor()
@@ -113,13 +165,16 @@ def save_recipe(recipe: dict) -> int:
     # Upsert recipe
     cur.execute(
         """
-        INSERT INTO recipes (name, instructions, source)
-        VALUES (?, ?, ?)
+        INSERT INTO recipes (name, instructions, source, difficulty, prep_time)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             instructions = excluded.instructions,
-            source = excluded.source
+            source = excluded.source,
+            difficulty = excluded.difficulty,
+            prep_time = excluded.prep_time
         """,
-        (recipe["name"], recipe["instructions"], recipe.get("source")),
+        (recipe["name"], recipe["instructions"], recipe.get("source"),
+         recipe.get("difficulty"), recipe.get("prep_time")),
     )
     cur.execute("SELECT id FROM recipes WHERE name = ?", (recipe["name"],))
     recipe_id = cur.fetchone()["id"]
@@ -165,10 +220,21 @@ def run(text: str | None = None, url: str | None = None, file: str | None = None
         print("ERROR: No recipe input provided.")
         sys.exit(1)
 
-    recipe = parse_recipe(text, source=source)
+    # Parse and rate run in parallel — both only need the raw text
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        parse_future = pool.submit(parse_recipe, text, source)
+        rate_future = pool.submit(rate_recipe, text)
+        recipe = parse_future.result()
+        rating = rate_future.result()
+
+    recipe["difficulty"] = rating.get("difficulty")
+    recipe["prep_time"] = rating.get("prep_time")
+
     recipe_id = save_recipe(recipe)
 
-    print(f"\n[DB] Saved recipe: '{recipe['name']}' (id={recipe_id})")
+    diff_label = recipe.get("difficulty") or "?"
+    time_label = {"under_10": "<10 min", "10_to_20": "10-20 min", "over_20": ">20 min"}.get(recipe.get("prep_time"), "?")
+    print(f"\n[DB] Saved recipe: '{recipe['name']}' (id={recipe_id}) — {diff_label} / {time_label}")
     print(f"     Ingredients ({len(recipe['ingredients'])}):")
     for ing in recipe["ingredients"]:
         optional = " (optional)" if ing.get("is_optional") else ""

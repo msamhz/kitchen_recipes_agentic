@@ -48,6 +48,19 @@ init_db()
 async def _startup_aliases():
     await generate_aliases_async(new_only=True)
 
+if sys.platform == "win32":
+    # WinError 10054: remote closes HTTP connection during ProactorEventLoop socket teardown.
+    # Purely cosmetic on Windows — suppress so it doesn't spam the console.
+    def _suppress_proactor_pipe_errors(loop, context):
+        exc = context.get("exception")
+        if isinstance(exc, (ConnectionResetError, OSError)) and "connection_lost" in context.get("message", ""):
+            return
+        loop.default_exception_handler(context)
+
+    @nicegui_app.on_startup
+    async def _configure_loop():
+        asyncio.get_event_loop().set_exception_handler(_suppress_proactor_pipe_errors)
+
 # ── Access logger middleware ───────────────────────────────────────────────────
 class _AccessLog(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
@@ -369,7 +382,7 @@ def recipes_tab():
                     conn = get_connection()
                     cur = conn.cursor()
                     cur.execute("""
-                        SELECT r.id, r.name, r.source, r.created_at,
+                        SELECT r.id, r.name, r.source, r.created_at, r.difficulty, r.prep_time,
                                COUNT(ri.ingredient_id) as ing_count
                         FROM recipes r
                         LEFT JOIN recipe_ingredients ri ON ri.recipe_id = r.id
@@ -385,8 +398,10 @@ def recipes_tab():
                         for r in rows:
                             with ui.card().style(CARD2).classes("w-full"):
                                 with ui.row().classes("items-center justify-between w-full"):
-                                    with ui.column().classes("gap-0"):
-                                        ui.label(r["name"]).style(TEXT + " font-weight:600;")
+                                    with ui.column().classes("gap-1"):
+                                        with ui.row().classes("items-center gap-2 flex-wrap"):
+                                            ui.label(r["name"]).style(TEXT + " font-weight:600;")
+                                            _diff_time_badges({"difficulty": r["difficulty"], "prep_time": r["prep_time"]})
                                         src = f" · {r['source'][:40]}..." if r["source"] else ""
                                         ui.label(f"{r['ing_count']} ingredients{src}").style(MUTED)
                                     with ui.row().classes("items-center gap-2"):
@@ -416,6 +431,7 @@ def today_tab():
 
     selected_date = {"value": today}
     wfh_cache: dict[date, bool] = {}
+    diff_filter: dict = {"value": _ALL_DIFFS.copy()}  # reset per WFH state
 
     with ui.column().classes("w-full gap-4"):
         section_heading("Today's Meals", "today")
@@ -460,6 +476,7 @@ def today_tab():
                 wfh = wfh_cache.get(d)
                 if wfh is not None:
                     wfh_toggle.set_value(wfh)
+                    diff_filter["value"] = _ALL_DIFFS.copy() if wfh else {"easy"}
                     day_label = "today" if d == today else d.strftime("%a %d %b")
                     cal_lbl.set_text(f"{'WFH' if wfh else 'Office'} — {day_label}")
                 load_suggestions()
@@ -468,7 +485,12 @@ def today_tab():
 
             with ui.row().classes("items-center gap-4 flex-wrap"):
                 wfh_toggle = ui.switch("WFH", value=False).style("color:#e0e0f0;")
-                wfh_toggle.on_value_change(lambda e: load_suggestions())
+
+                def _on_wfh_change(e):
+                    diff_filter["value"] = _ALL_DIFFS.copy() if e.value else {"easy"}
+                    load_suggestions()
+
+                wfh_toggle.on_value_change(_on_wfh_change)
                 cal_lbl = ui.label("Checking calendar for the week...").style(MUTED)
 
         # ── Suggestions ──────────────────────────────────────────────────────
@@ -478,29 +500,60 @@ def today_tab():
             suggestions_col.clear()
             results = match_recipes()
             wfh = wfh_toggle.value
+            allowed = diff_filter["value"]
+
+            def _apply(recipes):
+                filtered = [r for r in recipes
+                            if r.get("difficulty") in allowed or r.get("difficulty") is None]
+                return _sort_recipes(filtered)
+
+            can_cook = _apply(results["can_cook"])
+            can_shop = _apply(results["can_shop"])
 
             with suggestions_col:
+                # ── Filter chips ─────────────────────────────────────────────
+                with ui.row().classes("items-center gap-1 flex-wrap"):
+                    ui.label("Difficulty:").style(MUTED + " font-size:0.78rem;")
+                    for diff in ("easy", "medium", "hard"):
+                        is_active = diff in allowed
+                        fg, bg = _DIFF_STYLE[diff]
+                        chip_style = (
+                            f"background:{fg} !important; color:white !important;"
+                            if is_active else
+                            f"background:#1e1e2e !important; color:{fg} !important; border:1px solid {fg}55;"
+                        ) + " border-radius:6px; font-size:0.78rem; padding:0 0.6rem; min-height:28px;"
+
+                        def _toggle(d=diff):
+                            if d in diff_filter["value"] and len(diff_filter["value"]) > 1:
+                                diff_filter["value"].discard(d)
+                            else:
+                                diff_filter["value"].add(d)
+                            load_suggestions()
+
+                        ui.button(diff.capitalize(), on_click=_toggle, color=None).props("unelevated dense").style(chip_style)
+
+                # ── Cook Now ─────────────────────────────────────────────────
                 with ui.column().classes("w-full gap-2"):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("check_circle", size="1.2rem").style(f"color:{GREEN};")
-                        ui.label(f"Cook Now  ({len(results['can_cook'])})").style(f"color:{GREEN}; font-weight:700;")
-                    if results["can_cook"]:
-                        for r in results["can_cook"]:
+                        ui.label(f"Cook Now  ({len(can_cook)})").style(f"color:{GREEN}; font-weight:700;")
+                    if can_cook:
+                        for r in can_cook:
                             _recipe_card(r, cookable=True, refresh_fn=load_suggestions)
                     else:
-                        ui.label("No cookable recipes — scan your kitchen or add recipes.").style(MUTED)
+                        ui.label("No cookable recipes match the current filter.").style(MUTED)
 
-                if wfh:
-                    ui.separator().style("background:#2a2a4a;")
-                    with ui.column().classes("w-full gap-2"):
-                        with ui.row().classes("items-center gap-2"):
-                            ui.icon("shopping_cart", size="1.2rem").style(f"color:{AMBER};")
-                            ui.label(f"Can Cook If You Shop  ({len(results['can_shop'])})").style(f"color:{AMBER}; font-weight:700;")
-                        if results["can_shop"]:
-                            for r in results["can_shop"]:
-                                _recipe_card(r, cookable=False, refresh_fn=load_suggestions)
-                        else:
-                            ui.label("Nothing missing — you're fully stocked!").style(MUTED)
+                # ── Can Shop ─────────────────────────────────────────────────
+                ui.separator().style("background:#2a2a4a;")
+                with ui.column().classes("w-full gap-2"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.icon("shopping_cart", size="1.2rem").style(f"color:{AMBER};")
+                        ui.label(f"Can Cook If You Shop  ({len(can_shop)})").style(f"color:{AMBER}; font-weight:700;")
+                    if can_shop:
+                        for r in can_shop:
+                            _recipe_card(r, cookable=False, refresh_fn=load_suggestions)
+                    else:
+                        ui.label("Nothing missing — you're fully stocked!").style(MUTED)
 
         # ── Parallel calendar check for all 7 days ───────────────────────────
         async def check_all_days():
@@ -531,11 +584,47 @@ def today_tab():
         ui.timer(0.5, check_all_days, once=True)
 
 
+_DIFF_STYLE = {
+    "easy":   (GREEN,   "#1e3a2a"),
+    "medium": (AMBER,   "#3a2e1a"),
+    "hard":   ("#ff6b6b", "#3a1a1a"),
+}
+_TIME_LABEL = {"under_10": "<10 min", "10_to_20": "10–20 min", "over_20": ">20 min"}
+_DIFF_ORDER = {"easy": 0, "medium": 1, "hard": 2}
+_TIME_ORDER = {"under_10": 0, "10_to_20": 1, "over_20": 2}
+_ALL_DIFFS = {"easy", "medium", "hard"}
+
+
+def _sort_recipes(recipes: list) -> list:
+    return sorted(recipes, key=lambda r: (
+        _DIFF_ORDER.get(r.get("difficulty"), 3),
+        _TIME_ORDER.get(r.get("prep_time"), 3),
+    ))
+
+
+def _diff_time_badges(recipe: dict):
+    diff = recipe.get("difficulty")
+    time = recipe.get("prep_time")
+    if diff and diff in _DIFF_STYLE:
+        fg, bg = _DIFF_STYLE[diff]
+        ui.label(diff.capitalize()).style(
+            f"background:{bg}; color:{fg}; border:1px solid {fg}55;"
+            " border-radius:4px; padding:1px 6px; font-size:0.72rem; font-weight:600;"
+        )
+    if time and time in _TIME_LABEL:
+        ui.label(_TIME_LABEL[time]).style(
+            "background:#2a2a4a; color:#4a9eff; border:1px solid #3a5a8a55;"
+            " border-radius:4px; padding:1px 6px; font-size:0.72rem;"
+        )
+
+
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
     with ui.card().style(CARD2).classes("w-full"):
         with ui.row().classes("items-start justify-between w-full gap-2"):
             with ui.column().classes("gap-1 flex-1"):
-                ui.label(recipe["name"]).style(TEXT + " font-weight:600; font-size:1rem;")
+                with ui.row().classes("items-center gap-2 flex-wrap"):
+                    ui.label(recipe["name"]).style(TEXT + " font-weight:600; font-size:1rem;")
+                    _diff_time_badges(recipe)
 
                 if recipe.get("have"):
                     ui.label(f"Have: {', '.join(recipe['have'])}").style(f"color:{GREEN}; font-size:0.82rem;")
