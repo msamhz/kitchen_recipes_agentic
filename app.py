@@ -41,7 +41,6 @@ except Exception:
 TMP_DIR = Path(".tmp")
 TMP_DIR.mkdir(exist_ok=True)
 
-# DB init runs once at startup — idempotent, won't touch existing data
 init_db()
 
 @nicegui_app.on_startup
@@ -49,8 +48,6 @@ async def _startup_aliases():
     await generate_aliases_async(new_only=True)
 
 if sys.platform == "win32":
-    # WinError 10054: remote closes HTTP connection during ProactorEventLoop socket teardown.
-    # Purely cosmetic on Windows — suppress so it doesn't spam the console.
     def _suppress_proactor_pipe_errors(loop, context):
         exc = context.get("exception")
         if isinstance(exc, (ConnectionResetError, OSError)) and "connection_lost" in context.get("message", ""):
@@ -61,18 +58,16 @@ if sys.platform == "win32":
     async def _configure_loop():
         asyncio.get_event_loop().set_exception_handler(_suppress_proactor_pipe_errors)
 
-# ── Access logger middleware ───────────────────────────────────────────────────
 class _AccessLog(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         ip = request.client.host if request.client else "?"
         path = request.url.path
-        if not path.startswith("/_nicegui"):          # skip internal WS/asset noise
+        if not path.startswith("/_nicegui"):
             print(f"[Access] {ip}  {request.method}  {path}")
         return await call_next(request)
 
 nicegui_app.add_middleware(_AccessLog)
 
-# ── Startup: print all LAN addresses ─────────────────────────────────────────
 def _print_network_info():
     hostname = socket.gethostname()
     print(f"\n{'─'*52}")
@@ -91,28 +86,105 @@ def _print_network_info():
 
 _print_network_info()
 
-# ── Shared calendar cache (all browser sessions read from this) ───────────────
-# Keyed by date. Populated on first load; resets when app.py restarts.
 _wfh_global_cache: dict[date, bool] = {}
 
 # ── Style constants ────────────────────────────────────────────────────────────
-BG = "#0f0f1a"
-CARD = "background: #1a1a2e; border-radius: 12px; padding: 1.25rem;"
-CARD2 = "background: #2a2a4a; border-radius: 8px; padding: 0.75rem 1rem;"
-ACCENT = "#e94560"
-BLUE = "#3a5a8a"
-GREEN = "#4caf50"
-AMBER = "#ffb74d"
-TEXT = "color: #e0e0f0;"
-MUTED = "color: #a0a0b0; font-size: 0.85rem;"
-LABEL = f"color: {ACCENT}; font-weight: 700; font-size: 1.05rem;"
+BG      = "#faf7f2"
+CARD    = ("background:#ffffff; border-radius:12px; padding:1.25rem;"
+           " border:1px solid #e4ddd4; box-shadow:0 2px 8px rgba(60,40,20,0.07);")
+CARD2   = ("background:#fdf9f5; border-radius:8px; padding:0.75rem 1rem;"
+           " border:1px solid #e8e2d8;")
+ACCENT  = "#c4603a"
+BLUE    = "#4a7a9b"
+GREEN   = "#5c8a6e"
+AMBER   = "#b07830"
+TEXT    = "color:#2d2420;"
+MUTED   = "color:#9a8a7a; font-size:0.85rem;"
+SERIF   = "font-family:'Playfair Display',Georgia,serif;"
+LABEL   = f"color:{ACCENT}; font-weight:700; font-size:1.05rem; {SERIF}"
+
+PASTEL_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap');
+
+body {
+  background: #faf7f2 !important;
+  font-family: 'DM Sans', sans-serif !important;
+  color: #2d2420 !important;
+}
+
+/* ── Header ── */
+.q-header {
+  background: #ffffff !important;
+  border-bottom: 1px solid #e4ddd4 !important;
+  box-shadow: 0 1px 6px rgba(60,40,20,0.08) !important;
+}
+
+/* ── Tabs ── */
+.q-tabs { background: #ffffff !important; border-bottom: 1px solid #e4ddd4 !important; }
+.q-tab-panels { background: #faf7f2 !important; }
+.q-tab__indicator { background: #c4603a !important; height: 3px !important; }
+.q-tab--active .q-tab__label,
+.q-tab--active .q-icon { color: #c4603a !important; }
+.q-tab:not(.q-tab--active) .q-tab__label,
+.q-tab:not(.q-tab--active) .q-icon { color: #9a8a7a !important; }
+
+/* ── Card hover lift ── */
+.q-card {
+  transition: transform 0.22s ease, box-shadow 0.22s ease !important;
+}
+.q-card:hover {
+  transform: translateY(-4px) !important;
+  box-shadow: 0 10px 28px rgba(60,40,20,0.13) !important;
+}
+
+/* ── Inner sub-cards: gentler lift ── */
+.lift-gentle {
+  transition: transform 0.18s ease, box-shadow 0.18s ease !important;
+}
+.lift-gentle:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 18px rgba(60,40,20,0.10) !important;
+}
+
+/* ── Buttons ── */
+.q-btn { border-radius: 8px !important; transition: filter 0.15s ease, transform 0.12s ease !important; }
+.q-btn:hover { filter: brightness(0.93); transform: translateY(-1px); }
+
+/* ── Tabs inside recipes section ── */
+.q-expansion-item__container { background: transparent !important; }
+
+/* ── Dialog ── */
+.q-dialog__backdrop { background: rgba(60,40,20,0.40) !important; }
+.q-dialog .q-card {
+  background: #ffffff !important;
+  border: 1px solid #e4ddd4 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 40px rgba(60,40,20,0.18) !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #f0ebe3; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #c8bfb0; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a89888; }
+
+/* ── Input fields ── */
+.q-field__native, .q-field__input { color: #2d2420 !important; }
+.q-field { border-radius: 8px !important; }
+
+/* ── Checkbox / radio ── */
+.q-radio__inner, .q-checkbox__inner { color: #c4603a !important; }
+
+/* ── Separator ── */
+.q-separator { background: #e4ddd4 !important; }
+"""
 
 CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
 
 
 def section_heading(text: str, icon_name: str):
-    with ui.row().classes("items-center gap-2 mb-1"):
-        ui.icon(icon_name, size="1.4rem").style(f"color: {ACCENT};")
+    with ui.row().classes("items-center gap-2 mb-2"):
+        ui.icon(icon_name, size="1.4rem").style(f"color:{ACCENT};")
         ui.label(text).style(LABEL)
 
 
@@ -130,7 +202,6 @@ def scan_tab():
 
         with ui.row().classes("w-full gap-4 items-start flex-wrap"):
 
-            # ── Upload card ──────────────────────────────────────────────────
             with ui.card().style(CARD).classes("flex-1 min-w-72"):
                 ui.label("Upload Photos").style(TEXT + " font-weight:600;")
                 ui.label("Drop one or more photos (fridge, pantry, counter)").style(MUTED)
@@ -143,8 +214,8 @@ def scan_tab():
                     uploaded_paths.append(str(dest))
                     with file_list:
                         with ui.row().classes("items-center gap-2"):
-                            ui.icon("image", size="1rem").style(f"color: {GREEN};")
-                            ui.label(e.file.name).style("color:#e0e0f0; font-size:0.85rem;")
+                            ui.icon("image", size="1rem").style(f"color:{GREEN};")
+                            ui.label(e.file.name).style("color:#5a4a3a; font-size:0.85rem;")
 
                 ui.upload(
                     multiple=True,
@@ -152,22 +223,20 @@ def scan_tab():
                     on_upload=handle_upload,
                 ).props("accept='.jpg,.jpeg,.png,.webp' flat bordered").classes("w-full mt-2")
 
-            # ── Mode + controls card ─────────────────────────────────────────
             with ui.card().style(CARD).classes("min-w-52"):
                 ui.label("Scan Mode").style(TEXT + " font-weight:600;")
                 mode = ui.radio(
                     options={"update": "Update  (add to stock)", "restock": "Restock  (replace all)"},
                     value="update",
-                ).style("color:#e0e0f0;")
+                ).style("color:#5a4a3a;")
 
-                ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+                ui.separator().classes("my-2")
 
                 scan_btn = ui.button("Scan Now", icon="search").props("unelevated").style(
-                    f"background:{ACCENT}; color:white; width:100%; border-radius:8px;"
+                    f"background:{ACCENT}; color:white; width:100%; border-radius:8px; font-weight:600;"
                 )
                 scan_status = ui.label("").style(MUTED)
 
-        # ── Results panel (hidden until scan completes) ──────────────────────
         results_panel = ui.card().style(CARD).classes("w-full")
         results_panel.set_visibility(False)
         with results_panel:
@@ -178,11 +247,11 @@ def scan_tab():
             checklist_col = ui.column().classes("w-full gap-1")
             extras_col = ui.column().classes("w-full gap-1 mt-1")
 
-            ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+            ui.separator().classes("my-2")
             ui.label("Add missing ingredient").style(MUTED)
 
             with ui.row().classes("w-full gap-2"):
-                add_input = ui.input(placeholder="e.g. fish sauce, tofu...").classes("flex-1").style("color:#e0e0f0;")
+                add_input = ui.input(placeholder="e.g. fish sauce, tofu...").classes("flex-1").style("color:#2d2420;")
 
                 def add_extra():
                     name = add_input.value.strip().lower()
@@ -190,15 +259,17 @@ def scan_tab():
                         return
                     extra_items.append(name)
                     with extras_col:
-                        with ui.row().classes("items-center gap-2 px-2 py-1 rounded").style("background:#1e3a2a;"):
+                        with ui.row().classes("items-center gap-2 px-3 py-1 rounded-lg").style(
+                            f"background:#eef6f0; border:1px solid {GREEN}44;"
+                        ):
                             ui.icon("add_circle", size="1rem").style(f"color:{GREEN};")
-                            ui.label(name).style("color:#e0e0f0; font-size:0.9rem; flex:1;")
+                            ui.label(name).style("color:#2d3a2d; font-size:0.9rem; flex:1;")
                     add_input.value = ""
 
                 add_input.on("keydown.enter", add_extra)
-                ui.button("Add", on_click=add_extra).props("flat").style(f"color:{GREEN};")
+                ui.button("Add", on_click=add_extra).props("flat").style(f"color:{GREEN}; font-weight:600;")
 
-            ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+            ui.separator().classes("my-2")
 
             def on_confirm():
                 final = [n for n, cb in checkbox_refs.items() if cb.value] + extra_items
@@ -214,12 +285,11 @@ def scan_tab():
                 asyncio.ensure_future(generate_aliases_async(new_only=True))
 
             with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("Cancel", on_click=lambda: results_panel.set_visibility(False)).props("flat").style("color:#ff6b6b;")
+                ui.button("Cancel", on_click=lambda: results_panel.set_visibility(False)).props("flat").style("color:#9a8a7a;")
                 ui.button("Confirm & Save", icon="check", on_click=on_confirm).props("unelevated").style(
-                    f"background:{ACCENT}; color:white; border-radius:8px;"
+                    f"background:{ACCENT}; color:white; border-radius:8px; font-weight:600;"
                 )
 
-        # ── Scan logic ───────────────────────────────────────────────────────
         async def do_scan():
             if not uploaded_paths:
                 ui.notify("Upload at least one image first.", color="warning")
@@ -265,7 +335,6 @@ def scan_tab():
 
                 final_candidates = sorted(set(confirmed))
 
-                # Deduplicate against existing DB names (merges near-identical detected names)
                 scan_status.set_text("Deduplicating ingredient names...")
                 conn = get_connection()
                 cur = conn.cursor()
@@ -276,13 +345,13 @@ def scan_tab():
 
                 with checklist_col:
                     for name in final_candidates:
-                        cb = ui.checkbox(name, value=True).style("color:#e0e0f0;")
+                        cb = ui.checkbox(name, value=True).style("color:#2d2420;")
                         cb.props("color=positive keep-color")
                         checkbox_refs[name] = cb
 
                 count_lbl.set_text(f"{len(final_candidates)} ingredient(s) detected")
                 results_panel.set_visibility(True)
-                scan_status.set_text(f"Done — review and confirm below")
+                scan_status.set_text("Done — review and confirm below")
 
             except Exception as e:
                 ui.notify(f"Scan error: {e}", color="negative")
@@ -307,22 +376,19 @@ def recipes_tab():
 
         with ui.tab_panels(rtabs, value=t_add).classes("w-full"):
 
-            # ── Add recipe panel ─────────────────────────────────────────────
             with ui.tab_panel(t_add):
                 with ui.card().style(CARD).classes("w-full"):
                     ui.label("Recipe source").style(TEXT + " font-weight:600;")
                     input_method = ui.radio(
                         options={"text": "Paste text", "url": "From URL"},
                         value="text",
-                    ).style("color:#e0e0f0;")
+                    ).style("color:#5a4a3a;")
 
                     recipe_text = ui.textarea(
                         placeholder="Paste recipe here — name, ingredients, instructions..."
-                    ).classes("w-full mt-2").style("color:#e0e0f0; min-height:160px;")
+                    ).classes("w-full mt-2").style("color:#2d2420; min-height:160px;")
 
-                    recipe_url = ui.input(
-                        placeholder="https://..."
-                    ).classes("w-full mt-2").style("color:#e0e0f0;")
+                    recipe_url = ui.input(placeholder="https://...").classes("w-full mt-2").style("color:#2d2420;")
                     recipe_url.set_visibility(False)
 
                     def toggle_method():
@@ -370,10 +436,9 @@ def recipes_tab():
                             add_btn.enable()
 
                     add_btn = ui.button("Add Recipe", icon="save", on_click=do_add).props("unelevated").style(
-                        f"background:{ACCENT}; color:white; border-radius:8px; margin-top:0.75rem;"
+                        f"background:{ACCENT}; color:white; border-radius:8px; font-weight:600; margin-top:0.75rem;"
                     )
 
-            # ── View all recipes panel ────────────────────────────────────────
             with ui.tab_panel(t_view):
                 recipes_col = ui.column().classes("w-full gap-2")
 
@@ -396,7 +461,7 @@ def recipes_tab():
                             ui.label("No recipes yet. Add one!").style(MUTED)
                             return
                         for r in rows:
-                            with ui.card().style(CARD2).classes("w-full"):
+                            with ui.card().style(CARD2).classes("w-full lift-gentle"):
                                 with ui.row().classes("items-center justify-between w-full"):
                                     with ui.column().classes("gap-1"):
                                         with ui.row().classes("items-center gap-2 flex-wrap"):
@@ -405,7 +470,7 @@ def recipes_tab():
                                         src = f" · {r['source'][:40]}..." if r["source"] else ""
                                         ui.label(f"{r['ing_count']} ingredients{src}").style(MUTED)
                                     with ui.row().classes("items-center gap-2"):
-                                        ui.label(f"#{r['id']}").style("color:#3a5a8a; font-size:0.8rem;")
+                                        ui.label(f"#{r['id']}").style("color:#c8bfb0; font-size:0.8rem;")
 
                                         def delete_recipe(rid=r["id"], rname=r["name"]):
                                             conn2 = get_connection()
@@ -415,10 +480,10 @@ def recipes_tab():
                                             ui.notify(f"Deleted '{rname}'", color="warning")
                                             load_recipes()
 
-                                        ui.button(icon="delete", on_click=delete_recipe).props("flat round dense").style("color:#ff6b6b; font-size:0.8rem;")
+                                        ui.button(icon="delete", on_click=delete_recipe).props("flat round dense").style("color:#d08080; font-size:0.8rem;")
 
                 load_recipes()
-                ui.button("Refresh", icon="refresh", on_click=load_recipes).props("flat").style(f"color:#a0a0b0; margin-top:0.5rem;")
+                ui.button("Refresh", icon="refresh", on_click=load_recipes).props("flat").style(f"color:#9a8a7a; margin-top:0.5rem;")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -431,12 +496,11 @@ def today_tab():
 
     selected_date = {"value": today}
     wfh_cache: dict[date, bool] = {}
-    diff_filter: dict = {"value": _ALL_DIFFS.copy()}  # reset per WFH state
+    diff_filter: dict = {"value": _ALL_DIFFS.copy()}
 
     with ui.column().classes("w-full gap-4"):
         section_heading("Today's Meals", "today")
 
-        # ── Week date selector ───────────────────────────────────────────────
         with ui.card().style(CARD).classes("w-full"):
             ui.label("Select day").style(MUTED)
 
@@ -444,17 +508,18 @@ def today_tab():
                 is_selected = d == selected_date["value"]
                 wfh = wfh_cache.get(d)
                 if wfh is True:
-                    color, bg_dim = GREEN, "#1e3a2a"
+                    color, bg_dim = GREEN, "#eef6f0"
                 elif wfh is False:
-                    color, bg_dim = AMBER, "#3a2e1a"
+                    color, bg_dim = AMBER, "#fdf3e4"
                 else:
-                    color, bg_dim = BLUE, "#2a2a4a"
+                    color, bg_dim = BLUE, "#edf2f7"
                 if is_selected:
                     return (f"background:{color} !important; color:white !important;"
-                            f" border-radius:8px; min-width:56px; font-weight:700;")
+                            f" border-radius:10px; min-width:56px; font-weight:700;"
+                            f" box-shadow:0 3px 10px {color}55;")
                 else:
                     return (f"background:{bg_dim} !important; color:{color} !important;"
-                            f" border-radius:8px; min-width:56px; border:1px solid {color}66;")
+                            f" border-radius:10px; min-width:56px; border:1px solid {color}44;")
 
             btn_container = ui.row().classes("gap-2 flex-wrap")
 
@@ -481,10 +546,10 @@ def today_tab():
                     cal_lbl.set_text(f"{'WFH' if wfh else 'Office'} — {day_label}")
                 load_suggestions()
 
-            ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+            ui.separator().classes("my-2")
 
             with ui.row().classes("items-center gap-4 flex-wrap"):
-                wfh_toggle = ui.switch("WFH", value=False).style("color:#e0e0f0;")
+                wfh_toggle = ui.switch("WFH", value=False).style("color:#5a4a3a;")
 
                 def _on_wfh_change(e):
                     diff_filter["value"] = _ALL_DIFFS.copy() if e.value else {"easy"}
@@ -493,7 +558,6 @@ def today_tab():
                 wfh_toggle.on_value_change(_on_wfh_change)
                 cal_lbl = ui.label("Checking calendar for the week...").style(MUTED)
 
-        # ── Suggestions ──────────────────────────────────────────────────────
         suggestions_col = ui.column().classes("w-full gap-3")
 
         def load_suggestions():
@@ -511,17 +575,17 @@ def today_tab():
             can_shop = _apply(results["can_shop"])
 
             with suggestions_col:
-                # ── Filter chips ─────────────────────────────────────────────
-                with ui.row().classes("items-center gap-1 flex-wrap"):
+                # Filter chips
+                with ui.row().classes("items-center gap-2 flex-wrap"):
                     ui.label("Difficulty:").style(MUTED + " font-size:0.78rem;")
                     for diff in ("easy", "medium", "hard"):
                         is_active = diff in allowed
                         fg, bg = _DIFF_STYLE[diff]
                         chip_style = (
-                            f"background:{fg} !important; color:white !important;"
+                            f"background:{fg} !important; color:white !important; font-weight:600;"
                             if is_active else
-                            f"background:#1e1e2e !important; color:{fg} !important; border:1px solid {fg}55;"
-                        ) + " border-radius:6px; font-size:0.78rem; padding:0 0.6rem; min-height:28px;"
+                            f"background:{bg} !important; color:{fg} !important; border:1px solid {fg}55;"
+                        ) + " border-radius:20px; font-size:0.78rem; padding:0 0.75rem; min-height:28px;"
 
                         def _toggle(d=diff):
                             if d in diff_filter["value"] and len(diff_filter["value"]) > 1:
@@ -532,30 +596,29 @@ def today_tab():
 
                         ui.button(diff.capitalize(), on_click=_toggle, color=None).props("unelevated dense").style(chip_style)
 
-                # ── Cook Now ─────────────────────────────────────────────────
+                # Cook Now
                 with ui.column().classes("w-full gap-2"):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("check_circle", size="1.2rem").style(f"color:{GREEN};")
-                        ui.label(f"Cook Now  ({len(can_cook)})").style(f"color:{GREEN}; font-weight:700;")
+                        ui.label(f"Cook Now  ({len(can_cook)})").style(f"color:{GREEN}; font-weight:700; {SERIF} font-size:1rem;")
                     if can_cook:
                         for r in can_cook:
                             _recipe_card(r, cookable=True, refresh_fn=load_suggestions)
                     else:
                         ui.label("No cookable recipes match the current filter.").style(MUTED)
 
-                # ── Can Shop ─────────────────────────────────────────────────
-                ui.separator().style("background:#2a2a4a;")
+                # Can Shop
+                ui.separator().classes("my-1")
                 with ui.column().classes("w-full gap-2"):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("shopping_cart", size="1.2rem").style(f"color:{AMBER};")
-                        ui.label(f"Can Cook If You Shop  ({len(can_shop)})").style(f"color:{AMBER}; font-weight:700;")
+                        ui.label(f"Can Cook If You Shop  ({len(can_shop)})").style(f"color:{AMBER}; font-weight:700; {SERIF} font-size:1rem;")
                     if can_shop:
                         for r in can_shop:
                             _recipe_card(r, cookable=False, refresh_fn=load_suggestions)
                     else:
                         ui.label("Nothing missing — you're fully stocked!").style(MUTED)
 
-        # ── Parallel calendar check for all 7 days ───────────────────────────
         async def check_all_days():
             if not CALENDAR_AVAILABLE:
                 cal_lbl.set_text("No calendar — toggle WFH manually")
@@ -585,9 +648,9 @@ def today_tab():
 
 
 _DIFF_STYLE = {
-    "easy":   (GREEN,   "#1e3a2a"),
-    "medium": (AMBER,   "#3a2e1a"),
-    "hard":   ("#ff6b6b", "#3a1a1a"),
+    "easy":   (GREEN,   "#eef6f0"),
+    "medium": (AMBER,   "#fdf3e4"),
+    "hard":   ("#c4504a", "#fdf0f0"),
 }
 _TIME_LABEL = {"under_10": "<10 min", "10_to_20": "10–20 min", "over_20": ">20 min"}
 _DIFF_ORDER = {"easy": 0, "medium": 1, "hard": 2}
@@ -609,21 +672,21 @@ def _diff_time_badges(recipe: dict):
         fg, bg = _DIFF_STYLE[diff]
         ui.label(diff.capitalize()).style(
             f"background:{bg}; color:{fg}; border:1px solid {fg}55;"
-            " border-radius:4px; padding:1px 6px; font-size:0.72rem; font-weight:600;"
+            " border-radius:20px; padding:1px 8px; font-size:0.72rem; font-weight:600;"
         )
     if time and time in _TIME_LABEL:
         ui.label(_TIME_LABEL[time]).style(
-            "background:#2a2a4a; color:#4a9eff; border:1px solid #3a5a8a55;"
-            " border-radius:4px; padding:1px 6px; font-size:0.72rem;"
+            f"background:#edf2f7; color:{BLUE}; border:1px solid {BLUE}33;"
+            " border-radius:20px; padding:1px 8px; font-size:0.72rem;"
         )
 
 
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
-    with ui.card().style(CARD2).classes("w-full"):
+    with ui.card().style(CARD2).classes("w-full lift-gentle"):
         with ui.row().classes("items-start justify-between w-full gap-2"):
             with ui.column().classes("gap-1 flex-1"):
                 with ui.row().classes("items-center gap-2 flex-wrap"):
-                    ui.label(recipe["name"]).style(TEXT + " font-weight:600; font-size:1rem;")
+                    ui.label(recipe["name"]).style(TEXT + f" font-weight:700; font-size:1rem; {SERIF}")
                     _diff_time_badges(recipe)
 
                 if recipe.get("have"):
@@ -639,21 +702,22 @@ def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
                 def open_cooked_dialog(rid=recipe["id"], rname=recipe["name"]):
                     ingredients = get_required_ingredients(rid)
 
-                    with ui.dialog() as dlg, ui.card().style(CARD + " min-width:340px; max-width:480px;"):
-                        ui.label(f"Mark as cooked: {rname}").style(TEXT + " font-weight:600; font-size:1rem;")
+                    with ui.dialog() as dlg, ui.card().style("min-width:340px; max-width:480px; padding:1.5rem;"):
+                        ui.label(f"Mark as cooked").style(TEXT + f" font-weight:700; font-size:1.1rem; {SERIF}")
+                        ui.label(rname).style(f"color:{ACCENT}; font-size:0.95rem; margin-bottom:0.5rem;")
                         ui.label("Untick items you still have remaining:").style(MUTED + " font-size:0.82rem; margin-bottom:0.25rem;")
 
                         checks: dict[str, dict] = {}
                         for ing in ingredients:
                             dname = ing["display_name"]
                             sname = ing["stocked_name"]
-                            cb = ui.checkbox(dname, value=bool(sname)).style("color:#e0e0f0;")
+                            cb = ui.checkbox(dname, value=bool(sname)).style("color:#2d2420;")
                             if not sname:
                                 cb.props("disable")
                             checks[dname] = {"cb": cb, "stocked_name": sname}
 
-                        with ui.row().classes("w-full justify-end gap-2 mt-2"):
-                            ui.button("Cancel", on_click=dlg.close).props("flat").style("color:#a0a0b0;")
+                        with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                            ui.button("Cancel", on_click=dlg.close).props("flat").style("color:#9a8a7a;")
 
                             def confirm(d=dlg, rn=rname, c=checks):
                                 to_deplete = [
@@ -668,28 +732,27 @@ def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
                                 refresh_fn()
 
                             ui.button("Confirm", icon="done_all", on_click=confirm).props("unelevated").style(
-                                f"background:{GREEN}; color:white; border-radius:8px;"
+                                f"background:{GREEN}; color:white; border-radius:8px; font-weight:600;"
                             )
 
                     dlg.open()
 
                 ui.button("Mark Cooked", icon="done_all", on_click=open_cooked_dialog).props("unelevated").style(
-                    f"background:{GREEN}; color:white; border-radius:8px; white-space:nowrap;"
+                    f"background:{GREEN}; color:white; border-radius:8px; font-weight:600; white-space:nowrap;"
                 )
 
-        # Expandable instructions
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("SELECT instructions, source FROM recipes WHERE id = ?", (recipe["id"],))
         row = cur.fetchone()
         conn.close()
         if row and row["instructions"]:
-            with ui.expansion("Instructions", icon="receipt_long").style("color:#a0a0b0; width:100%; margin-top:0.25rem;"):
+            with ui.expansion("Instructions", icon="receipt_long").style("color:#9a8a7a; width:100%; margin-top:0.25rem;"):
                 if row["source"]:
                     ui.link(row["source"], row["source"], new_tab=True).style(
-                        "color:#4a9eff; font-size:0.8rem; word-break:break-all; display:block; margin-bottom:0.5rem;"
+                        f"color:{BLUE}; font-size:0.8rem; word-break:break-all; display:block; margin-bottom:0.5rem;"
                     )
-                ui.label(row["instructions"]).style("color:#c0c0d0; font-size:0.88rem; white-space:pre-wrap;")
+                ui.label(row["instructions"]).style("color:#5a4a3a; font-size:0.88rem; white-space:pre-wrap;")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -702,11 +765,10 @@ def stock_tab():
 
         with ui.row().classes("w-full gap-4 items-start flex-wrap"):
 
-            # ── Ingredient list ──────────────────────────────────────────────
             with ui.card().style(CARD).classes("flex-1 min-w-72"):
                 with ui.row().classes("items-center justify-between w-full mb-2"):
                     ui.label("Current Stock").style(TEXT + " font-weight:600;")
-                    ui.button(icon="refresh", on_click=lambda: load_stock()).props("flat round dense").style("color:#a0a0b0;")
+                    ui.button(icon="refresh", on_click=lambda: load_stock()).props("flat round dense").style("color:#9a8a7a;")
 
                 stock_col = ui.column().classes("w-full gap-1")
 
@@ -727,22 +789,21 @@ def stock_tab():
                             return
 
                         if in_s:
-                            ui.label(f"IN STOCK  ({len(in_s)})").style(f"color:{GREEN}; font-size:0.78rem; font-weight:700; margin-top:0.25rem;")
+                            ui.label(f"In Stock  ({len(in_s)})").style(f"color:{GREEN}; font-size:0.78rem; font-weight:700; margin-top:0.25rem;")
                             with ui.column().classes("w-full gap-1").style("max-height:260px; overflow-y:auto;"):
                                 for r in in_s:
                                     _ingredient_row(r, True, load_stock)
 
                         if out_s:
-                            ui.label(f"OUT OF STOCK  ({len(out_s)})").style("color:#ff6b6b; font-size:0.78rem; font-weight:700; margin-top:0.75rem;")
+                            ui.label(f"Out of Stock  ({len(out_s)})").style("color:#c4504a; font-size:0.78rem; font-weight:700; margin-top:0.75rem;")
                             with ui.column().classes("w-full gap-1").style("max-height:200px; overflow-y:auto;"):
                                 for r in out_s:
                                     _ingredient_row(r, False, load_stock)
 
-                # Add manually
-                ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
+                ui.separator().classes("my-2")
                 ui.label("Add ingredient manually").style(MUTED)
                 with ui.row().classes("w-full gap-2"):
-                    manual = ui.input(placeholder="e.g. miso paste").classes("flex-1").style("color:#e0e0f0;")
+                    manual = ui.input(placeholder="e.g. miso paste").classes("flex-1").style("color:#2d2420;")
 
                     def add_manual():
                         name = manual.value.strip().lower()
@@ -755,21 +816,20 @@ def stock_tab():
 
                     manual.on("keydown.enter", add_manual)
                     ui.button("Add", on_click=add_manual).props("unelevated").style(
-                        f"background:{BLUE}; color:white; border-radius:8px;"
+                        f"background:{BLUE}; color:white; border-radius:8px; font-weight:600;"
                     )
 
                 load_stock()
 
-            # ── Shopping list ────────────────────────────────────────────────
             with ui.card().style(CARD).classes("min-w-64"):
                 with ui.row().classes("items-center justify-between w-full mb-2"):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("shopping_cart", size="1.2rem").style(f"color:{AMBER};")
                         ui.label("Shopping List").style(TEXT + " font-weight:600;")
-                    ui.button(icon="refresh", on_click=lambda: load_shopping()).props("flat round dense").style("color:#a0a0b0;")
+                    ui.button(icon="refresh", on_click=lambda: load_shopping()).props("flat round dense").style("color:#9a8a7a;")
 
                 shopping_col = ui.column().classes("w-full gap-1")
-                active_recipe: dict = {"value": None}  # None = all recipes
+                active_recipe: dict = {"value": None}
 
                 def load_shopping():
                     shopping_col.clear()
@@ -783,17 +843,16 @@ def stock_tab():
                                 ui.label("Nothing to buy — all recipes are cookable!").style(MUTED)
                             return
 
-                        # Recipe filter chips — shown only when >1 recipe needs shopping
                         if len(all_recipe_names) > 1:
                             ui.label("Filter by recipe:").style(MUTED + " font-size:0.78rem;")
                             with ui.row().classes("gap-1 flex-wrap mb-1"):
                                 def _make_chip(rname):
                                     is_active = active_recipe["value"] == rname
                                     chip_style = (
-                                        f"background:{ACCENT} !important; color:white !important;"
+                                        f"background:{ACCENT} !important; color:white !important; font-weight:600;"
                                         if is_active else
-                                        f"background:#2a2a4a !important; color:#a0a0b0 !important;"
-                                    ) + " border-radius:6px; font-size:0.78rem; padding:0 0.5rem;"
+                                        f"background:#f5f0ea !important; color:#9a8a7a !important; border:1px solid #e4ddd4;"
+                                    ) + " border-radius:20px; font-size:0.78rem; padding:0 0.6rem;"
 
                                     def _toggle(rn=rname):
                                         active_recipe["value"] = None if active_recipe["value"] == rn else rn
@@ -804,17 +863,16 @@ def stock_tab():
                                 for rn in all_recipe_names:
                                     _make_chip(rn)
 
-                        # Items scoped to active filter
                         data = build_list(recipe_filter=[active_recipe["value"]]) if active_recipe["value"] else all_data
                         items = data["items"]
 
-                        ui.separator().style("background:#2a2a4a; margin:0.25rem 0;")
+                        ui.separator().classes("my-1")
 
                         for item in items:
                             with ui.row().classes("items-start gap-2 py-1"):
                                 ui.icon("radio_button_unchecked", size="1rem").style(f"color:{AMBER}; flex-shrink:0; margin-top:2px;")
                                 with ui.column().classes("gap-0"):
-                                    ui.label(item["ingredient"]).style("color:#e0e0f0; font-size:0.9rem;")
+                                    ui.label(item["ingredient"]).style("color:#2d2420; font-size:0.9rem;")
                                     if not active_recipe["value"]:
                                         ui.label(f"→ {', '.join(item['needed_for'])}").style(MUTED)
 
@@ -822,12 +880,13 @@ def stock_tab():
 
 
 def _ingredient_row(row, in_stk: bool, refresh_fn):
-    bg = "#2a2a4a" if in_stk else "#1e1e2e"
-    with ui.row().classes("items-center gap-2 px-2 py-1 rounded w-full").style(f"background:{bg};"):
+    bg = "#f5f9f6" if in_stk else "#fdf6f6"
+    border = f"border:1px solid {GREEN}44;" if in_stk else "border:1px solid #e8c8c8;"
+    with ui.row().classes("items-center gap-2 px-2 py-1 rounded w-full").style(f"background:{bg}; {border}"):
         ui.icon("check" if in_stk else "close", size="0.9rem").style(
-            f"color:{GREEN if in_stk else '#ff6b6b'};"
+            f"color:{GREEN if in_stk else '#c4504a'};"
         )
-        ui.label(row["name"]).style("color:#e0e0f0; flex:1; font-size:0.88rem;")
+        ui.label(row["name"]).style("color:#2d2420; flex:1; font-size:0.88rem;")
 
         def toggle(name=row["name"], cur=in_stk):
             mark_ingredients([name], in_stock=not cur)
@@ -837,7 +896,7 @@ def _ingredient_row(row, in_stk: bool, refresh_fn):
             "Remove" if in_stk else "Restore",
             on_click=toggle,
         ).props("flat dense").style(
-            f"color:{'#ff6b6b' if in_stk else GREEN}; font-size:0.75rem; padding:0 0.25rem;"
+            f"color:{'#c4504a' if in_stk else GREEN}; font-size:0.75rem; padding:0 0.25rem;"
         )
 
 
@@ -847,19 +906,21 @@ def _ingredient_row(row, in_stk: bool, refresh_fn):
 
 @ui.page("/")
 def main_page():
-    ui.query("body").style(f"background:{BG}; font-family:'Inter',sans-serif;")
+    ui.add_css(PASTEL_CSS)
+    ui.query("body").style(f"background:{BG};")
 
-    with ui.header().style("background:#1a1a2e; padding:0.6rem 1.5rem; border-bottom:1px solid #2a2a4a; box-shadow:none;"):
+    with ui.header(elevated=False).style("padding:0.6rem 1.5rem; min-height:56px;"):
         with ui.row().classes("items-center gap-3"):
-            ui.icon("kitchen", size="1.6rem").style(f"color:{ACCENT};")
-            ui.label("Kitchen Agent").style("color:#e0e0f0; font-size:1.2rem; font-weight:700;")
-            ui.label("AI-powered kitchen management").style("color:#a0a0b0; font-size:0.8rem; margin-left:0.5rem;")
+            ui.icon("local_fire_department", size="1.6rem").style(f"color:{ACCENT};")
+            with ui.column().classes("gap-0"):
+                ui.label("Kitchen Agent").style(f"color:#2d2420; font-size:1.15rem; font-weight:700; {SERIF} line-height:1.2;")
+                ui.label("AI-powered kitchen management").style("color:#9a8a7a; font-size:0.72rem;")
 
-    with ui.tabs().classes("w-full").style("background:#1a1a2e; border-bottom:2px solid #2a2a4a;") as tabs:
-        t_scan = ui.tab("Scan Kitchen", icon="photo_camera")
-        t_recipes = ui.tab("Recipes", icon="menu_book")
-        t_today = ui.tab("Today's Meals", icon="today")
-        t_stock = ui.tab("Stock & Shopping", icon="inventory_2")
+    with ui.tabs().classes("w-full") as tabs:
+        t_scan    = ui.tab("Scan Kitchen",    icon="photo_camera")
+        t_recipes = ui.tab("Recipes",         icon="menu_book")
+        t_today   = ui.tab("Today's Meals",   icon="today")
+        t_stock   = ui.tab("Stock & Shopping", icon="inventory_2")
 
     with ui.tab_panels(tabs, value=t_scan).classes("w-full").style(f"background:{BG}; padding:1.5rem;"):
         with ui.tab_panel(t_scan):
@@ -877,6 +938,6 @@ ui.run(
     port=8181,
     reload=False,
     show=True,
-    dark=True,
+    dark=False,
     favicon="🍳",
 )
