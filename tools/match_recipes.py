@@ -38,7 +38,18 @@ def match_recipes() -> dict:
 
         cur.execute(
             """
-            SELECT i.name, ri.is_optional, i.in_stock
+            SELECT
+                i.name,
+                ri.is_optional,
+                CASE
+                    WHEN i.in_stock = 1 THEN 1
+                    WHEN EXISTS (
+                        SELECT 1 FROM ingredient_aliases ia
+                        JOIN ingredients i2 ON i2.id = ia.ingredient_id
+                        WHERE ia.alias = i.name COLLATE NOCASE AND i2.in_stock = 1
+                    ) THEN 1
+                    ELSE 0
+                END AS in_stock
             FROM recipe_ingredients ri
             JOIN ingredients i ON i.id = ri.ingredient_id
             WHERE ri.recipe_id = ?
@@ -56,17 +67,22 @@ def match_recipes() -> dict:
         missing_optional = [
             i["name"] for i in ingredients if i["is_optional"] and not i["in_stock"]
         ]
+        have = [
+            i["name"] for i in ingredients if i["in_stock"]
+        ]
 
         if not missing_required:
             can_cook.append({
                 "id": rid,
                 "name": rname,
+                "have": have,
                 "missing_optional": missing_optional,
             })
         else:
             can_shop.append({
                 "id": rid,
                 "name": rname,
+                "have": have,
                 "missing_required": missing_required,
                 "missing_optional": missing_optional,
             })

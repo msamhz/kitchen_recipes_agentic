@@ -9,20 +9,28 @@ Opens at:  http://localhost:8181
 
 import asyncio
 import os
+import socket
 import sys
+import urllib3
 from datetime import date, timedelta
 from pathlib import Path
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tools"))
 
-from nicegui import ui, events
+from nicegui import ui, events, app as nicegui_app
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 from db_init import init_db, get_connection
 from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, deduplicate_async, upsert_ingredients
 from match_recipes import match_recipes
-from update_stock import mark_recipe_cooked, mark_ingredients
+from update_stock import mark_recipe_cooked, mark_ingredients, get_required_ingredients
 from add_recipe import run as add_recipe_run
 from build_shopping_list import build_list
+from generate_aliases import run_async as generate_aliases_async
 
 try:
     from check_calendar import check_wfh
@@ -35,6 +43,44 @@ TMP_DIR.mkdir(exist_ok=True)
 
 # DB init runs once at startup — idempotent, won't touch existing data
 init_db()
+
+@nicegui_app.on_startup
+async def _startup_aliases():
+    await generate_aliases_async(new_only=True)
+
+# ── Access logger middleware ───────────────────────────────────────────────────
+class _AccessLog(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        ip = request.client.host if request.client else "?"
+        path = request.url.path
+        if not path.startswith("/_nicegui"):          # skip internal WS/asset noise
+            print(f"[Access] {ip}  {request.method}  {path}")
+        return await call_next(request)
+
+nicegui_app.add_middleware(_AccessLog)
+
+# ── Startup: print all LAN addresses ─────────────────────────────────────────
+def _print_network_info():
+    hostname = socket.gethostname()
+    print(f"\n{'─'*52}")
+    print(f"  Kitchen Agent  —  http://localhost:8181")
+    try:
+        addrs = socket.getaddrinfo(hostname, None)
+        seen = set()
+        for item in addrs:
+            ip = item[4][0]
+            if ip not in seen and not ip.startswith("127.") and ":" not in ip:
+                print(f"  LAN              http://{ip}:8181")
+                seen.add(ip)
+    except Exception:
+        pass
+    print(f"{'─'*52}\n")
+
+_print_network_info()
+
+# ── Shared calendar cache (all browser sessions read from this) ───────────────
+# Keyed by date. Populated on first load; resets when app.py restarts.
+_wfh_global_cache: dict[date, bool] = {}
 
 # ── Style constants ────────────────────────────────────────────────────────────
 BG = "#0f0f1a"
@@ -152,6 +198,7 @@ def scan_tab():
                 uploaded_paths.clear(); checkbox_refs.clear(); extra_items.clear()
                 checklist_col.clear(); extras_col.clear()
                 scan_status.set_text("")
+                asyncio.ensure_future(generate_aliases_async(new_only=True))
 
             with ui.row().classes("w-full justify-end gap-2"):
                 ui.button("Cancel", on_click=lambda: results_panel.set_visibility(False)).props("flat").style("color:#ff6b6b;")
@@ -262,21 +309,35 @@ def recipes_tab():
 
                     recipe_url = ui.input(
                         placeholder="https://..."
-                    ).classes("w-full mt-2").style("color:#e0e0f0; display:none;")
+                    ).classes("w-full mt-2").style("color:#e0e0f0;")
+                    recipe_url.set_visibility(False)
 
                     def toggle_method():
                         if input_method.value == "text":
-                            recipe_text.style("color:#e0e0f0; min-height:160px;")
-                            recipe_url.style("color:#e0e0f0; display:none;")
+                            recipe_text.set_visibility(True)
+                            recipe_url.set_visibility(False)
                         else:
-                            recipe_text.style("color:#e0e0f0; display:none;")
-                            recipe_url.style("color:#e0e0f0;")
+                            recipe_text.set_visibility(False)
+                            recipe_url.set_visibility(True)
 
                     input_method.on_value_change(toggle_method)
 
                     add_status = ui.label("").style(MUTED + " margin-top:0.5rem;")
 
                     async def do_add():
+                        if input_method.value == "text":
+                            if not recipe_text.value.strip():
+                                ui.notify("Paste some recipe text first.", color="warning")
+                                return
+                        else:
+                            url_val = recipe_url.value.strip()
+                            if not url_val:
+                                ui.notify("Enter a URL first.", color="warning")
+                                return
+                            if not url_val.startswith(("http://", "https://")):
+                                ui.notify("URL must start with http:// or https://", color="warning")
+                                return
+
                         add_btn.disable()
                         add_status.set_text("Parsing recipe via Claude...")
                         try:
@@ -288,6 +349,7 @@ def recipes_tab():
                             add_status.set_text(f"Saved as recipe #{rid}")
                             recipe_text.value = ""
                             recipe_url.value = ""
+                            asyncio.create_task(generate_aliases_async(new_only=True))
                         except Exception as e:
                             ui.notify(f"Error: {e}", color="negative")
                             add_status.set_text(f"Error: {e}")
@@ -327,7 +389,18 @@ def recipes_tab():
                                         ui.label(r["name"]).style(TEXT + " font-weight:600;")
                                         src = f" · {r['source'][:40]}..." if r["source"] else ""
                                         ui.label(f"{r['ing_count']} ingredients{src}").style(MUTED)
-                                    ui.label(f"#{r['id']}").style("color:#3a5a8a; font-size:0.8rem;")
+                                    with ui.row().classes("items-center gap-2"):
+                                        ui.label(f"#{r['id']}").style("color:#3a5a8a; font-size:0.8rem;")
+
+                                        def delete_recipe(rid=r["id"], rname=r["name"]):
+                                            conn2 = get_connection()
+                                            conn2.execute("DELETE FROM recipes WHERE id = ?", (rid,))
+                                            conn2.commit()
+                                            conn2.close()
+                                            ui.notify(f"Deleted '{rname}'", color="warning")
+                                            load_recipes()
+
+                                        ui.button(icon="delete", on_click=delete_recipe).props("flat round dense").style("color:#ff6b6b; font-size:0.8rem;")
 
                 load_recipes()
                 ui.button("Refresh", icon="refresh", on_click=load_recipes).props("flat").style(f"color:#a0a0b0; margin-top:0.5rem;")
@@ -361,31 +434,35 @@ def today_tab():
                 else:
                     color, bg_dim = BLUE, "#2a2a4a"
                 if is_selected:
-                    return f"background:{color}; color:white; border-radius:8px; min-width:56px; font-weight:700;"
+                    return (f"background:{color} !important; color:white !important;"
+                            f" border-radius:8px; min-width:56px; font-weight:700;")
                 else:
-                    return f"background:{bg_dim}; color:{color}; border-radius:8px; min-width:56px; border:1px solid {color}66;"
+                    return (f"background:{bg_dim} !important; color:{color} !important;"
+                            f" border-radius:8px; min-width:56px; border:1px solid {color}66;")
+
+            btn_container = ui.row().classes("gap-2 flex-wrap")
+
+            def rebuild_buttons():
+                btn_container.clear()
+                with btn_container:
+                    for d in week_days:
+                        (
+                            ui.button(f"{d.strftime('%a')}\n{d.day}", on_click=lambda day=d: select_day(day), color=None)
+                            .style(style_day_btn(d))
+                            .props("unelevated")
+                        )
+
+            rebuild_buttons()
 
             async def select_day(d: date):
                 selected_date["value"] = d
-                day_buttons_row.refresh()
+                rebuild_buttons()
                 wfh = wfh_cache.get(d)
                 if wfh is not None:
                     wfh_toggle.set_value(wfh)
                     day_label = "today" if d == today else d.strftime("%a %d %b")
                     cal_lbl.set_text(f"{'WFH' if wfh else 'Office'} — {day_label}")
                 load_suggestions()
-
-            @ui.refreshable
-            def day_buttons_row():
-                with ui.row().classes("gap-2 flex-wrap"):
-                    for d in week_days:
-                        (
-                            ui.button(f"{d.strftime('%a')}\n{d.day}", on_click=lambda day=d: select_day(day))
-                            .style(style_day_btn(d))
-                            .props("unelevated")
-                        )
-
-            day_buttons_row()
 
             ui.separator().style("background:#2a2a4a; margin:0.5rem 0;")
 
@@ -432,10 +509,18 @@ def today_tab():
                 load_suggestions()
                 return
             for d in week_days:
+                if d in _wfh_global_cache:
+                    wfh_cache[d] = _wfh_global_cache[d]
+                    rebuild_buttons()
+                    if d == today:
+                        wfh_toggle.set_value(wfh_cache[d])
+                        cal_lbl.set_text(f"{'WFH' if wfh_cache[d] else 'Office'} — today (cached)")
+                    continue
                 try:
                     result = await asyncio.to_thread(check_wfh, d)
+                    _wfh_global_cache[d] = result
                     wfh_cache[d] = result
-                    day_buttons_row.refresh()
+                    rebuild_buttons()
                     if d == today:
                         wfh_toggle.set_value(result)
                         cal_lbl.set_text(f"{'WFH' if result else 'Office'} — today")
@@ -452,30 +537,69 @@ def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
             with ui.column().classes("gap-1 flex-1"):
                 ui.label(recipe["name"]).style(TEXT + " font-weight:600; font-size:1rem;")
 
+                if recipe.get("have"):
+                    ui.label(f"Have: {', '.join(recipe['have'])}").style(f"color:{GREEN}; font-size:0.82rem;")
+
                 if recipe.get("missing_required"):
-                    ui.label(f"Buy: {', '.join(recipe['missing_required'])}").style(f"color:{AMBER}; font-size:0.85rem;")
+                    ui.label(f"Buy: {', '.join(recipe['missing_required'])}").style(f"color:{AMBER}; font-size:0.82rem;")
 
                 if recipe.get("missing_optional"):
-                    ui.label(f"Optional missing: {', '.join(recipe['missing_optional'])}").style(MUTED)
+                    ui.label(f"Optional: {', '.join(recipe['missing_optional'])}").style(MUTED + " font-size:0.82rem;")
 
             if cookable:
-                def mark_cooked(rid=recipe["id"], rname=recipe["name"]):
-                    mark_recipe_cooked(rid)
-                    ui.notify(f"'{rname}' cooked — stock updated.", color="positive")
-                    refresh_fn()
+                def open_cooked_dialog(rid=recipe["id"], rname=recipe["name"]):
+                    ingredients = get_required_ingredients(rid)
 
-                ui.button("Mark Cooked", icon="done_all", on_click=mark_cooked).props("unelevated").style(
+                    with ui.dialog() as dlg, ui.card().style(CARD + " min-width:340px; max-width:480px;"):
+                        ui.label(f"Mark as cooked: {rname}").style(TEXT + " font-weight:600; font-size:1rem;")
+                        ui.label("Untick items you still have remaining:").style(MUTED + " font-size:0.82rem; margin-bottom:0.25rem;")
+
+                        checks: dict[str, dict] = {}
+                        for ing in ingredients:
+                            dname = ing["display_name"]
+                            sname = ing["stocked_name"]
+                            cb = ui.checkbox(dname, value=bool(sname)).style("color:#e0e0f0;")
+                            if not sname:
+                                cb.props("disable")
+                            checks[dname] = {"cb": cb, "stocked_name": sname}
+
+                        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                            ui.button("Cancel", on_click=dlg.close).props("flat").style("color:#a0a0b0;")
+
+                            def confirm(d=dlg, rn=rname, c=checks):
+                                to_deplete = [
+                                    info["stocked_name"]
+                                    for info in c.values()
+                                    if info["cb"].value and info["stocked_name"]
+                                ]
+                                if to_deplete:
+                                    mark_ingredients(to_deplete, in_stock=False)
+                                ui.notify(f"'{rn}' cooked — {len(to_deplete)} item(s) removed from stock.", color="positive")
+                                d.close()
+                                refresh_fn()
+
+                            ui.button("Confirm", icon="done_all", on_click=confirm).props("unelevated").style(
+                                f"background:{GREEN}; color:white; border-radius:8px;"
+                            )
+
+                    dlg.open()
+
+                ui.button("Mark Cooked", icon="done_all", on_click=open_cooked_dialog).props("unelevated").style(
                     f"background:{GREEN}; color:white; border-radius:8px; white-space:nowrap;"
                 )
 
         # Expandable instructions
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT instructions FROM recipes WHERE id = ?", (recipe["id"],))
+        cur.execute("SELECT instructions, source FROM recipes WHERE id = ?", (recipe["id"],))
         row = cur.fetchone()
         conn.close()
         if row and row["instructions"]:
             with ui.expansion("Instructions", icon="receipt_long").style("color:#a0a0b0; width:100%; margin-top:0.25rem;"):
+                if row["source"]:
+                    ui.link(row["source"], row["source"], new_tab=True).style(
+                        "color:#4a9eff; font-size:0.8rem; word-break:break-all; display:block; margin-bottom:0.5rem;"
+                    )
                 ui.label(row["instructions"]).style("color:#c0c0d0; font-size:0.88rem; white-space:pre-wrap;")
 
 
@@ -556,22 +680,44 @@ def stock_tab():
                     ui.button(icon="refresh", on_click=lambda: load_shopping()).props("flat round dense").style("color:#a0a0b0;")
 
                 shopping_col = ui.column().classes("w-full gap-1")
+                active_recipe: dict = {"value": None}  # None = all recipes
 
                 def load_shopping():
                     shopping_col.clear()
-                    data = build_list()
-                    items = data["items"]
-                    recipes = data["recipes"]
+                    all_data = build_list()
+                    all_recipe_names = all_data["recipes"]
 
                     with shopping_col:
-                        if not items:
+                        if not all_data["items"]:
                             with ui.row().classes("items-center gap-2"):
                                 ui.icon("check_circle", size="1rem").style(f"color:{GREEN};")
                                 ui.label("Nothing to buy — all recipes are cookable!").style(MUTED)
                             return
 
-                        if recipes:
-                            ui.label(f"For: {', '.join(recipes[:2])}{'…' if len(recipes) > 2 else ''}").style(MUTED)
+                        # Recipe filter chips — shown only when >1 recipe needs shopping
+                        if len(all_recipe_names) > 1:
+                            ui.label("Filter by recipe:").style(MUTED + " font-size:0.78rem;")
+                            with ui.row().classes("gap-1 flex-wrap mb-1"):
+                                def _make_chip(rname):
+                                    is_active = active_recipe["value"] == rname
+                                    chip_style = (
+                                        f"background:{ACCENT} !important; color:white !important;"
+                                        if is_active else
+                                        f"background:#2a2a4a !important; color:#a0a0b0 !important;"
+                                    ) + " border-radius:6px; font-size:0.78rem; padding:0 0.5rem;"
+
+                                    def _toggle(rn=rname):
+                                        active_recipe["value"] = None if active_recipe["value"] == rn else rn
+                                        load_shopping()
+
+                                    ui.button(rname, on_click=_toggle, color=None).props("unelevated dense").style(chip_style)
+
+                                for rn in all_recipe_names:
+                                    _make_chip(rn)
+
+                        # Items scoped to active filter
+                        data = build_list(recipe_filter=[active_recipe["value"]]) if active_recipe["value"] else all_data
+                        items = data["items"]
 
                         ui.separator().style("background:#2a2a4a; margin:0.25rem 0;")
 
@@ -580,7 +726,8 @@ def stock_tab():
                                 ui.icon("radio_button_unchecked", size="1rem").style(f"color:{AMBER}; flex-shrink:0; margin-top:2px;")
                                 with ui.column().classes("gap-0"):
                                     ui.label(item["ingredient"]).style("color:#e0e0f0; font-size:0.9rem;")
-                                    ui.label(f"→ {', '.join(item['needed_for'])}").style(MUTED)
+                                    if not active_recipe["value"]:
+                                        ui.label(f"→ {', '.join(item['needed_for'])}").style(MUTED)
 
                 load_shopping()
 

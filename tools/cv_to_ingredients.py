@@ -12,9 +12,12 @@ Usage:
 import argparse
 import asyncio
 import base64
+import io
 import json
 import os
 import sys
+
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
@@ -50,12 +53,59 @@ Reply with ONLY a JSON object:
 """
 
 
+_MAX_B64_BYTES = 4_800_000  # Claude limit is 5 MB base64; leave headroom
+
 def encode_image(image_path: str) -> tuple[str, str]:
     ext = os.path.splitext(image_path)[1].lower()
     media_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
     media_type = media_map.get(ext, "image/jpeg")
+
     with open(image_path, "rb") as f:
-        return base64.standard_b64encode(f.read()).decode("utf-8"), media_type
+        raw = f.read()
+
+    # Fast path: already small enough
+    if len(base64.standard_b64encode(raw)) <= _MAX_B64_BYTES:
+        return base64.standard_b64encode(raw).decode("utf-8"), media_type
+
+    # Compress with Pillow until it fits
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+    quality = 85
+    while quality >= 30:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+        data = buf.getvalue()
+        if len(base64.standard_b64encode(data)) <= _MAX_B64_BYTES:
+            print(f"[CV] Compressed image to {len(data)//1024}KB (quality={quality})")
+            return base64.standard_b64encode(data).decode("utf-8"), "image/jpeg"
+        quality -= 15
+
+    # Last resort: halve resolution then compress
+    img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=70)
+    data = buf.getvalue()
+    print(f"[CV] Resized + compressed image to {len(data)//1024}KB")
+    return base64.standard_b64encode(data).decode("utf-8"), "image/jpeg"
+
+
+def _parse_cv_response(raw: str) -> dict:
+    """Parse Claude's JSON response, recovering gracefully from truncation."""
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Response was cut off — extract whatever complete ingredient objects exist
+        import re
+        names = re.findall(r'"name"\s*:\s*"([^"]+)"', raw)
+        print(f"[CV] Warning: JSON truncated, recovered {len(names)} ingredient names")
+        return {
+            "ingredients": [{"name": n, "confidence": "medium", "notes": ""} for n in names],
+            "uncertain": [],
+        }
 
 
 def identify_ingredients(image_path: str) -> dict:
@@ -64,7 +114,7 @@ def identify_ingredients(image_path: str) -> dict:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[
             {
                 "role": "user",
@@ -76,13 +126,7 @@ def identify_ingredients(image_path: str) -> dict:
         ],
     )
 
-    raw = response.content[0].text.strip()
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    return _parse_cv_response(response.content[0].text)
 
 
 def resolve_uncertain(description: str) -> str | None:
@@ -112,7 +156,7 @@ async def identify_ingredients_async(image_path: str) -> dict:
 
     response = await async_client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[
             {
                 "role": "user",
@@ -123,12 +167,7 @@ async def identify_ingredients_async(image_path: str) -> dict:
             }
         ],
     )
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    return _parse_cv_response(response.content[0].text)
 
 
 DEDUP_PROMPT = """You are deduplicating a kitchen ingredient list before saving to a database.

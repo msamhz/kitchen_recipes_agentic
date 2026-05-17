@@ -48,6 +48,40 @@ def mark_recipe_cooked(recipe_id: int):
     return affected
 
 
+def get_required_ingredients(recipe_id: int) -> list[dict]:
+    """
+    Returns required ingredients for a recipe.
+    Each entry has:
+      display_name  — ingredient name as written in the recipe
+      stocked_name  — actual stock item name (may differ via alias), or None if not in stock
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            i.name AS display_name,
+            CASE
+                WHEN i.in_stock = 1 THEN i.name
+                ELSE (
+                    SELECT i2.name FROM ingredient_aliases ia
+                    JOIN ingredients i2 ON i2.id = ia.ingredient_id
+                    WHERE ia.alias = i.name COLLATE NOCASE AND i2.in_stock = 1
+                    LIMIT 1
+                )
+            END AS stocked_name
+        FROM recipe_ingredients ri
+        JOIN ingredients i ON i.id = ri.ingredient_id
+        WHERE ri.recipe_id = ? AND ri.is_optional = 0
+        ORDER BY i.name
+        """,
+        (recipe_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [{"display_name": r["display_name"], "stocked_name": r["stocked_name"]} for r in rows]
+
+
 def mark_ingredients(names: list[str], in_stock: bool):
     conn = get_connection()
     cur = conn.cursor()

@@ -15,8 +15,14 @@ import json
 import os
 import sys
 
+import urllib3
 import requests
 from bs4 import BeautifulSoup
+import yt_dlp
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
@@ -47,16 +53,39 @@ Recipe text:
 """
 
 
+def _is_youtube(url: str) -> bool:
+    from urllib.parse import urlparse
+    return urlparse(url).hostname in _YOUTUBE_HOSTS
+
+
+def _fetch_youtube(url: str) -> str:
+    print(f"[Fetch] YouTube — extracting metadata: {url}")
+    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "nocheckcertificate": True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    title = info.get("title", "")
+    description = info.get("description", "")
+    if not description:
+        raise ValueError("No description found in YouTube video — the channel may not include a recipe.")
+
+    # Cap combined text to 8k chars; description usually has the recipe
+    text = f"Video title: {title}\n\n{description}"
+    return text[:8000]
+
+
 def fetch_url(url: str) -> str:
+    if _is_youtube(url):
+        return _fetch_youtube(url)
+
     print(f"[Fetch] {url}")
     headers = {"User-Agent": "Mozilla/5.0 (compatible; KitchenBot/1.0)"}
-    resp = requests.get(url, headers=headers, timeout=15)
+    resp = requests.get(url, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    # Remove script/style noise
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
-    return soup.get_text(separator="\n", strip=True)[:8000]  # cap at 8k chars
+    return soup.get_text(separator="\n", strip=True)[:8000]
 
 
 def parse_recipe(text: str, source: str | None = None) -> dict:

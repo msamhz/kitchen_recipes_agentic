@@ -45,6 +45,12 @@ def init_db():
             is_optional   INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (recipe_id, ingredient_id)
         );
+
+        CREATE TABLE IF NOT EXISTS ingredient_aliases (
+            alias         TEXT    NOT NULL COLLATE NOCASE,
+            ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+            PRIMARY KEY (alias, ingredient_id)
+        );
     """)
 
     conn.commit()
