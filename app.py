@@ -9,6 +9,7 @@ Opens at:  http://localhost:8181
 
 import asyncio
 import os
+import re
 import socket
 import sys
 import urllib3
@@ -472,6 +473,8 @@ def recipes_tab():
                                     with ui.row().classes("items-center gap-2"):
                                         ui.label(f"#{r['id']}").style("color:#c8bfb0; font-size:0.8rem;")
 
+                                        ui.button(icon="edit", on_click=lambda rid=r["id"]: open_edit_dialog(rid, load_recipes)).props("flat round dense").style(f"color:{ACCENT}; opacity:0.7;")
+
                                         def delete_recipe(rid=r["id"], rname=r["name"]):
                                             conn2 = get_connection()
                                             conn2.execute("DELETE FROM recipes WHERE id = ?", (rid,))
@@ -681,6 +684,162 @@ def _diff_time_badges(recipe: dict):
         )
 
 
+_STEP_RE = re.compile(r'^\s*(\d+)[.)]\s*(.+)')
+
+
+def _format_steps_ui(instructions: str):
+    """Renders instructions as indented numbered steps when detected, else wrapped paragraphs."""
+    lines = [l.strip() for l in instructions.strip().splitlines() if l.strip()]
+    matches = [_STEP_RE.match(l) for l in lines]
+    numbered = sum(1 for m in matches if m)
+
+    if numbered >= max(2, len(lines) * 0.5):
+        for line, m in zip(lines, matches):
+            if m:
+                with ui.row().classes("items-start gap-3 py-1"):
+                    ui.label(m.group(1) + ".").style(
+                        f"color:{ACCENT}; font-weight:700; min-width:1.6rem; flex-shrink:0;"
+                        f" {SERIF} font-size:0.88rem; padding-top:1px;"
+                    )
+                    ui.label(m.group(2)).style("color:#5a4a3a; font-size:0.88rem; line-height:1.55; flex:1;")
+            else:
+                ui.label(line).style("color:#9a8a7a; font-size:0.82rem; font-style:italic; padding-left:2rem;")
+    else:
+        ui.label(instructions.strip()).style(
+            "color:#5a4a3a; font-size:0.88rem; white-space:pre-wrap; line-height:1.6;"
+        )
+
+
+def open_edit_dialog(rid: int, refresh_fn):
+    """Full recipe edit dialog — name, instructions, ingredients with optional flag."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, instructions, source FROM recipes WHERE id = ?", (rid,))
+    recipe_row = cur.fetchone()
+    cur.execute(
+        """
+        SELECT i.id, i.name, ri.is_optional
+        FROM recipe_ingredients ri
+        JOIN ingredients i ON i.id = ri.ingredient_id
+        WHERE ri.recipe_id = ?
+        ORDER BY ri.is_optional, i.name
+        """,
+        (rid,),
+    )
+    ingredients = [
+        {"id": r["id"], "name": r["name"], "is_optional": bool(r["is_optional"])}
+        for r in cur.fetchall()
+    ]
+    conn.close()
+
+    with ui.dialog() as dlg, ui.card().style(
+        "width:min(640px,92vw); padding:1.5rem; max-height:88vh; overflow-y:auto;"
+    ):
+        ui.label("Edit Recipe").style(TEXT + f" font-weight:700; font-size:1.15rem; {SERIF}")
+
+        name_input = ui.input("Recipe Name", value=recipe_row["name"]).classes("w-full mt-2").style("color:#2d2420;")
+
+        ui.label("Instructions").style(MUTED + " font-size:0.78rem; margin-top:1rem;")
+        instructions_area = ui.textarea(value=recipe_row["instructions"]).classes("w-full").style(
+            "color:#2d2420; min-height:150px;"
+        )
+
+        source_input = ui.input(
+            "Source URL (optional)", value=recipe_row["source"] or ""
+        ).classes("w-full mt-1").style("color:#2d2420;")
+
+        ui.separator().classes("my-3")
+
+        with ui.row().classes("items-center justify-between w-full mb-1"):
+            ui.label("Ingredients").style(f"color:{ACCENT}; font-weight:700; {SERIF} font-size:1rem;")
+            ui.label("Check 'Optional' for garnishes / nice-to-haves").style(MUTED + " font-size:0.72rem;")
+
+        ing_rows: list[dict] = []
+        ing_col = ui.column().classes("w-full gap-2")
+
+        def add_ingredient_row(name: str = "", is_optional: bool = False):
+            row_data: dict = {"name_input": None, "optional_cb": None, "deleted": False}
+            with ing_col:
+                with ui.row().classes("items-center gap-2 w-full") as row_el:
+                    row_data["name_input"] = (
+                        ui.input(placeholder="ingredient name", value=name)
+                        .classes("flex-1")
+                        .style("color:#2d2420;")
+                    )
+                    row_data["optional_cb"] = ui.checkbox("Optional", value=is_optional).style(
+                        "color:#5a4a3a; white-space:nowrap;"
+                    )
+
+                    def _remove(rd=row_data, el=row_el):
+                        rd["deleted"] = True
+                        el.set_visibility(False)
+
+                    ui.button(icon="remove_circle_outline", on_click=_remove).props("flat round dense").style(
+                        "color:#d08080;"
+                    )
+            ing_rows.append(row_data)
+
+        for ing in ingredients:
+            add_ingredient_row(ing["name"], ing["is_optional"])
+
+        ui.button("+ Add Ingredient", icon="add", on_click=lambda: add_ingredient_row()).props("flat").style(
+            f"color:{ACCENT}; font-weight:600; margin-top:0.25rem;"
+        )
+
+        ui.separator().classes("my-3")
+
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat").style("color:#9a8a7a;")
+
+            def _save(d=dlg):
+                new_name = name_input.value.strip()
+                new_instr = instructions_area.value.strip()
+                new_source = source_input.value.strip() or None
+
+                if not new_name:
+                    ui.notify("Recipe name cannot be empty.", color="warning")
+                    return
+
+                new_ings = [
+                    {"name": rd["name_input"].value.strip().lower(), "is_optional": rd["optional_cb"].value}
+                    for rd in ing_rows
+                    if not rd["deleted"] and rd["name_input"].value.strip()
+                ]
+                if not new_ings:
+                    ui.notify("Add at least one ingredient.", color="warning")
+                    return
+
+                conn2 = get_connection()
+                cur2 = conn2.cursor()
+                cur2.execute(
+                    "UPDATE recipes SET name=?, instructions=?, source=? WHERE id=?",
+                    (new_name, new_instr, new_source, rid),
+                )
+                cur2.execute("DELETE FROM recipe_ingredients WHERE recipe_id=?", (rid,))
+                for ing_data in new_ings:
+                    cur2.execute(
+                        "INSERT INTO ingredients (name, in_stock) VALUES (?, 0) ON CONFLICT(name) DO NOTHING",
+                        (ing_data["name"],),
+                    )
+                    cur2.execute("SELECT id FROM ingredients WHERE name=?", (ing_data["name"],))
+                    ing_id = cur2.fetchone()["id"]
+                    cur2.execute(
+                        "INSERT INTO recipe_ingredients (recipe_id, ingredient_id, is_optional) VALUES (?, ?, ?)",
+                        (rid, ing_id, 1 if ing_data["is_optional"] else 0),
+                    )
+                conn2.commit()
+                conn2.close()
+                ui.notify("Recipe updated!", color="positive")
+                d.close()
+                refresh_fn()
+
+            ui.button("Save Changes", icon="save", on_click=_save).props("unelevated").style(
+                f"background:{ACCENT}; color:white; border-radius:8px; font-weight:600;"
+            )
+
+    dlg.open()
+
+
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
     with ui.card().style(CARD2).classes("w-full lift-gentle"):
         with ui.row().classes("items-start justify-between w-full gap-2"):
@@ -697,6 +856,11 @@ def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
 
                 if recipe.get("missing_optional"):
                     ui.label(f"Optional: {', '.join(recipe['missing_optional'])}").style(MUTED + " font-size:0.82rem;")
+
+            # Edit button always visible
+            ui.button(icon="edit", on_click=lambda rid=recipe["id"]: open_edit_dialog(rid, refresh_fn)).props(
+                "flat round dense"
+            ).style(f"color:{ACCENT}; opacity:0.7;")
 
             if cookable:
                 def open_cooked_dialog(rid=recipe["id"], rname=recipe["name"]):
@@ -752,7 +916,7 @@ def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
                     ui.link(row["source"], row["source"], new_tab=True).style(
                         f"color:{BLUE}; font-size:0.8rem; word-break:break-all; display:block; margin-bottom:0.5rem;"
                     )
-                ui.label(row["instructions"]).style("color:#5a4a3a; font-size:0.88rem; white-space:pre-wrap;")
+                _format_steps_ui(row["instructions"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
