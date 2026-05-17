@@ -561,6 +561,18 @@ def today_tab():
                 wfh_toggle.on_value_change(_on_wfh_change)
                 cal_lbl = ui.label("Checking calendar for the week...").style(MUTED)
 
+                async def refresh_calendar():
+                    # Drop the global cache for the whole week so fresh API calls are made
+                    for d in week_days:
+                        _wfh_global_cache.pop(d, None)
+                        wfh_cache.pop(d, None)
+                    cal_lbl.set_text("Refreshing calendar...")
+                    await check_all_days()
+
+                ui.button(icon="refresh", on_click=refresh_calendar).props("flat round dense").style(
+                    f"color:{ACCENT}; opacity:0.7;"
+                ).tooltip("Re-fetch calendar (clears cached WFH status)")
+
         suggestions_col = ui.column().classes("w-full gap-3")
 
         def load_suggestions():
