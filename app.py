@@ -219,7 +219,7 @@ def scan_tab():
                             ui.icon("image", size="1rem").style(f"color:{GREEN};")
                             ui.label(e.file.name).style("color:#5a4a3a; font-size:0.85rem;")
 
-                ui.upload(
+                uploader = ui.upload(
                     multiple=True,
                     auto_upload=True,
                     on_upload=handle_upload,
@@ -238,6 +238,21 @@ def scan_tab():
                     f"background:{ACCENT}; color:white; width:100%; border-radius:8px; font-weight:600;"
                 )
                 scan_status = ui.label("").style(MUTED)
+
+                async def clear_images():
+                    uploaded_paths.clear()
+                    file_list.clear()
+                    await uploader.run_method("reset")
+                    scan_status.set_text("")
+                    log_panel.set_visibility(False)
+                    scan_log.clear()
+                    results_panel.set_visibility(False)
+                    checkbox_refs.clear()
+                    extra_items.clear()
+
+                ui.button("Clear images", icon="clear_all", on_click=clear_images).props("flat").style(
+                    f"color:#9a8a7a; width:100%; margin-top:0.25rem; font-size:0.82rem;"
+                )
 
         # Live backend log — shown while scanning/saving
         log_panel = ui.card().style(CARD2).classes("w-full")
