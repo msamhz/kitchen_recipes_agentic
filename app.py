@@ -761,6 +761,53 @@ def today_tab():
 
                         ui.button(diff.capitalize(), on_click=_toggle, color=None).props("unelevated dense").style(chip_style)
 
+                # Use Up First — recipes with expiring/expired ingredients
+                urgent_recipes = [r for r in can_cook if r.get("expiring_ingredients")]
+                if urgent_recipes:
+                    with ui.card().style(
+                        "background:#fff8f0; border-radius:10px; padding:0.75rem 1rem;"
+                        " border:1.5px solid #e8a04088; width:100%;"
+                    ).classes("w-full"):
+                        with ui.row().classes("items-center gap-2 mb-2"):
+                            ui.icon("warning_amber", size="1.1rem").style("color:#b87d2a;")
+                            ui.label("Use Up First").style(
+                                f"color:#b87d2a; font-weight:700; {SERIF} font-size:0.95rem;"
+                            )
+                            ui.label("— these recipes use ingredients expiring soon").style(
+                                "color:#9a7a3a; font-size:0.78rem;"
+                            )
+
+                        # Compact expiry summary rows, one per unique expiring ingredient
+                        seen_names: set = set()
+                        for r in urgent_recipes:
+                            for e in r.get("expiring_ingredients", []):
+                                n = e["name"]
+                                if n in seen_names:
+                                    continue
+                                seen_names.add(n)
+                                d = e["days_left"]
+                                if d < 0:
+                                    badge = f"expired {abs(d)}d ago"
+                                elif d == 0:
+                                    badge = "expires today"
+                                elif d == 1:
+                                    badge = "tomorrow"
+                                else:
+                                    badge = f"in {d} days"
+                                clr, clr_bg = _expiry_tier(d)
+                                with ui.row().classes("items-center gap-2 px-2 py-0.5 rounded").style(
+                                    f"background:{clr_bg};"
+                                ):
+                                    ui.icon("circle", size="0.55rem").style(f"color:{clr};")
+                                    ui.label(n).style(f"color:#5a4a3a; font-size:0.83rem; font-weight:600;")
+                                    ui.label(badge).style(
+                                        f"color:{clr}; font-size:0.78rem;"
+                                        f" background:{clr_bg}; border:1px solid {clr}44;"
+                                        " border-radius:12px; padding:0 6px;"
+                                    )
+
+                    ui.element("div").style("height:0.25rem;")
+
                 # Cook Now
                 with ui.column().classes("w-full gap-2"):
                     with ui.row().classes("items-center gap-2"):
@@ -825,6 +872,7 @@ _ALL_DIFFS = {"easy", "medium", "hard"}
 
 def _sort_recipes(recipes: list) -> list:
     return sorted(recipes, key=lambda r: (
+        -r.get("urgency_score", 0),          # highest urgency first
         _DIFF_ORDER.get(r.get("difficulty"), 3),
         _TIME_ORDER.get(r.get("prep_time"), 3),
     ))
@@ -1002,13 +1050,59 @@ def open_edit_dialog(rid: int, refresh_fn):
     dlg.open()
 
 
+def _expiry_tier(days_left: int) -> tuple[str, str]:
+    """Return (fg, bg) color pair for an ingredient's days-left value.
+    Tiers mirror the urgency scoring in match_recipes.py:
+      expired → red  |  ≤3d → orange-red  |  ≤7d → amber  |  ≤14d → olive
+    """
+    if days_left < 0:   return "#c4504a", "#fdf0f0"   # expired      — red
+    if days_left <= 3:  return "#d4713a", "#fdf4f0"   # ≤ 3 days     — orange-red
+    if days_left <= 7:  return "#c4943a", "#fdf8ec"   # ≤ 7 days     — amber
+    return              "#7a9a4a", "#f2f7ee"           # ≤ 14 days    — olive green
+
+
+def _expiry_urgency_label(expiring: list[dict]) -> str | None:
+    """Return a short human label for the most urgent expiring ingredient, or None."""
+    if not expiring:
+        return None
+    worst = expiring[0]
+    d = worst["days_left"]
+    name = worst["name"]
+    if d < 0:
+        return f"{name} expired!"
+    if d == 0:
+        return f"{name} expires today"
+    if d == 1:
+        return f"{name} expires tomorrow"
+    return f"{name} in {d}d"
+
+
 def _recipe_card(recipe: dict, cookable: bool, refresh_fn):
-    with ui.card().style(CARD2).classes("w-full lift-gentle"):
+    expiring = recipe.get("expiring_ingredients", [])
+    # Worst ingredient drives card border + badge color
+    worst_fg, worst_bg = (
+        _expiry_tier(expiring[0]["days_left"]) if expiring else ("#9a8a7a", "#f5f3f0")
+    )
+    card_border = (
+        f"border:1.5px solid {worst_fg}88;" if expiring else "border:1px solid #e8e2d8;"
+    )
+
+    with ui.card().style(
+        f"background:#fdf9f5; border-radius:8px; padding:0.75rem 1rem; {card_border}"
+    ).classes("w-full lift-gentle"):
         with ui.row().classes("items-start justify-between w-full gap-2"):
             with ui.column().classes("gap-1 flex-1"):
                 with ui.row().classes("items-center gap-2 flex-wrap"):
                     ui.label(recipe["name"]).style(TEXT + f" font-weight:700; font-size:1rem; {SERIF}")
                     _diff_time_badges(recipe)
+                    # Expiry urgency badge
+                    label_text = _expiry_urgency_label(expiring)
+                    if label_text:
+                        ui.label(f"⚑ {label_text}").style(
+                            f"background:{worst_bg}; color:{worst_fg};"
+                            f" border:1px solid {worst_fg}55;"
+                            " border-radius:20px; padding:1px 8px; font-size:0.72rem; font-weight:600;"
+                        )
 
                 if recipe.get("have"):
                     ui.label(f"Have: {', '.join(recipe['have'])}").style(f"color:{GREEN}; font-size:0.82rem;")

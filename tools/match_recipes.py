@@ -17,9 +17,40 @@ import argparse
 import json
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection
+
+# Urgency points per ingredient:
+# expired → 1000, ≤3 days → 50, ≤7 days → 20, ≤14 days → 5
+# Perishable (fridge/freezer) with no expiry date → +2 (tiebreak vs non-perishable)
+_URGENCY_EXPIRED  = 1000
+_URGENCY_3_DAYS   = 50
+_URGENCY_7_DAYS   = 20
+_URGENCY_14_DAYS  = 5
+_URGENCY_PERISHABLE_NO_DATE = 2
+
+
+def _ingredient_urgency(expiry_date_str: str | None, storage: str | None) -> int:
+    """Return urgency points for a single in-stock ingredient."""
+    if expiry_date_str:
+        try:
+            days_left = (date.fromisoformat(expiry_date_str) - date.today()).days
+            if days_left < 0:
+                return _URGENCY_EXPIRED
+            if days_left <= 3:
+                return _URGENCY_3_DAYS
+            if days_left <= 7:
+                return _URGENCY_7_DAYS
+            if days_left <= 14:
+                return _URGENCY_14_DAYS
+        except ValueError:
+            pass
+    # No expiry date — perishable items (fridge/freezer) still get a small bump
+    if storage in ("fridge", "freezer"):
+        return _URGENCY_PERISHABLE_NO_DATE
+    return 0
 
 
 def match_recipes() -> dict:
@@ -31,6 +62,7 @@ def match_recipes() -> dict:
 
     can_cook = []
     can_shop = []
+    today_str = date.today().isoformat()
 
     for recipe in recipes:
         rid = recipe["id"]
@@ -40,6 +72,8 @@ def match_recipes() -> dict:
             """
             SELECT
                 i.name,
+                i.expiry_date,
+                i.storage_location,
                 ri.is_optional,
                 CASE
                     WHEN i.in_stock = 1 THEN 1
@@ -67,11 +101,36 @@ def match_recipes() -> dict:
         missing_optional = [
             i["name"] for i in ingredients if i["is_optional"] and not i["in_stock"]
         ]
-        have = [
-            i["name"] for i in ingredients if i["in_stock"]
-        ]
+        have = [i["name"] for i in ingredients if i["in_stock"]]
 
-        meta = {"difficulty": recipe["difficulty"], "prep_time": recipe["prep_time"]}
+        # Compute urgency from in-stock required ingredients only
+        urgency_score = 0
+        expiring_ingredients = []
+        for ing in ingredients:
+            if not ing["in_stock"] or ing["is_optional"]:
+                continue
+            pts = _ingredient_urgency(ing["expiry_date"], ing["storage_location"])
+            urgency_score += pts
+            if pts > 0 and ing["expiry_date"]:
+                try:
+                    days_left = (date.fromisoformat(ing["expiry_date"]) - date.today()).days
+                    expiring_ingredients.append({
+                        "name": ing["name"],
+                        "expiry_date": ing["expiry_date"],
+                        "days_left": days_left,
+                    })
+                except ValueError:
+                    pass
+
+        # Sort expiring list: most urgent first
+        expiring_ingredients.sort(key=lambda x: x["days_left"])
+
+        meta = {
+            "difficulty": recipe["difficulty"],
+            "prep_time": recipe["prep_time"],
+            "urgency_score": urgency_score,
+            "expiring_ingredients": expiring_ingredients,
+        }
 
         if not missing_required:
             can_cook.append({
