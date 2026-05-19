@@ -33,6 +33,7 @@ from add_recipe import run as add_recipe_run
 from build_shopping_list import build_list
 from generate_aliases import run_async as generate_aliases_async
 from normalise import normalise_batch_async, normalise_ingredient_async, get_existing_ingredient_names
+from ingredient_index import get_index
 
 try:
     from check_calendar import check_wfh
@@ -993,6 +994,9 @@ def stock_tab():
                         if canonical != name:
                             ui.notify(f"Normalised to: {canonical}", color="info")
                         upsert_ingredients([canonical], mode="update")
+                        idx = get_index()
+                        if canonical not in idx.names:
+                            idx.embed_and_save(canonical)
                         manual.value = ""
                         load_stock()
                         ui.notify(f"Added: {canonical}", color="positive")

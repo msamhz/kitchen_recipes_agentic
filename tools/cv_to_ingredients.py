@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
 from clients import sync_client as client, async_client
 from normalise import normalise_batch_async, get_existing_ingredient_names
+from ingredient_index import get_index
 
 IDENTIFY_PROMPT = """You are a kitchen inventory assistant with excellent food recognition skills.
 
@@ -252,7 +253,9 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
         # Mark everything out of stock first, then re-enable what was found
         cur.execute("UPDATE ingredients SET in_stock = 0, last_updated = datetime('now')")
 
+    index = get_index()
     for name in names:
+        name = name.strip().lower()
         cur.execute(
             """
             INSERT INTO ingredients (name, in_stock, last_updated)
@@ -261,8 +264,11 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
                 in_stock = 1,
                 last_updated = datetime('now')
             """,
-            (name.strip().lower(),),
+            (name,),
         )
+        # Embed and index any ingredient that doesn't have an embedding yet
+        if name not in index.names:
+            index.embed_and_save(name)
 
     conn.commit()
     conn.close()
