@@ -57,6 +57,7 @@ def init_db():
     for sql in [
         "ALTER TABLE recipes ADD COLUMN difficulty TEXT",
         "ALTER TABLE recipes ADD COLUMN prep_time TEXT",
+        "ALTER TABLE ingredients ADD COLUMN embedding BLOB",
     ]:
         try:
             cur.execute(sql)
