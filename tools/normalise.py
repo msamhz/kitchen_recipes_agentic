@@ -136,23 +136,104 @@ async def normalise_batch_async(names: list[str], existing: list[str]) -> list[s
 # One-time cleanup: normalise all existing DB ingredients against each other
 # ---------------------------------------------------------------------------
 
+_CLEANUP_PROMPT = """You are deduplicating a kitchen ingredient database used in Singapore.
+
+Here is the full list of ingredient names currently in the database:
+{ingredients}
+
+Your task:
+1. Find groups of entries that refer to the SAME physical ingredient.
+   - Brand + generic: "tiparos fish sauce" and "fish sauce" are the same — use the generic
+   - Plurals: "egg" and "eggs" — keep the plural
+   - Multilingual: "mahsuri kicap lemak manis" and "sweet soy sauce (kicap lemak manis)" — keep the cleaner English/common form
+   - Minor variants: "cooking oil" and "oil" — keep the shorter common form
+   - Brand duplicates: two brand names for the same product — keep the more well-known or shorter one
+2. For each group, choose ONE canonical name (prefer: shorter, generic, English, common name)
+3. Only merge when HIGHLY confident — different spices are NOT the same even if related
+   - "chilli" and "chilli padi" are DIFFERENT (chilli padi = bird's eye chili, much hotter)
+   - "lemon" and "lime" are DIFFERENT fruits
+   - "tomatoes" and "tomato sauce" are DIFFERENT
+   - "prunes" and "dates" are DIFFERENT
+   - "beef" and "beef short plate slices" — these are the same cut, merge to "beef"
+4. Items that are genuinely distinct should NOT be merged
+
+Return ONLY valid JSON:
+{{
+  "groups": [
+    {{"canonical": "chosen name", "duplicates": ["name to remove 1", "name to remove 2"]}},
+    ...
+  ]
+}}
+
+Only include groups where there are actual duplicates. Do not list groups with a single item.
+"""
+
+
+async def _find_merge_groups(names: list[str]) -> list[dict]:
+    """Send the full ingredient list to Sonnet and get back merge groups."""
+    response = await async_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        messages=[{
+            "role": "user",
+            "content": _CLEANUP_PROMPT.format(ingredients=json.dumps(names)),
+        }],
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    # Extract JSON block regardless of surrounding text
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    else:
+        # Find the first { in case there's preamble text
+        idx = raw.find("{")
+        if idx != -1:
+            raw = raw[idx:]
+    try:
+        data = json.loads(raw.strip())
+        return data.get("groups", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+
+
 async def _cleanup_pass(dry_run: bool = True):
     existing = get_existing_ingredient_names()
-    print(f"[Normalise] {len(existing)} ingredients in DB")
+    print(f"[Normalise] {len(existing)} ingredients in DB — sending to Claude for grouping...")
 
-    merges: list[tuple[str, str]] = []  # (old_name, canonical)
+    groups = await _find_merge_groups(existing)
 
-    for name in existing:
-        # Build the "other" list (everything except this item)
-        others = [n for n in existing if n != name]
-        canonical = await normalise_ingredient_async(name, others)
-        if canonical != name:
-            merges.append((name, canonical))
-            print(f"  MERGE: '{name}' → '{canonical}'")
-        else:
-            print(f"  keep:  '{name}'")
+    if not groups:
+        print("No duplicates found.")
+        return
 
-    print(f"\n[Normalise] {len(merges)} merge(s) found")
+    # Validate: canonical and all duplicates must actually be in the DB
+    valid_set = set(n.lower() for n in existing)
+    merges: list[tuple[str, str]] = []  # (duplicate_to_remove, canonical)
+
+    for group in groups:
+        canonical = group.get("canonical", "").strip().lower()
+        duplicates = [d.strip().lower() for d in group.get("duplicates", [])]
+
+        if not canonical or canonical not in valid_set:
+            print(f"  [!] Skip group — canonical '{canonical}' not in DB")
+            continue
+
+        print(f"\n  CANONICAL: '{canonical}'")
+        for dup in duplicates:
+            if dup not in valid_set:
+                print(f"    [!] Skip '{dup}' — not in DB")
+                continue
+            if dup == canonical:
+                continue
+            print(f"    MERGE: '{dup}' -> '{canonical}'")
+            merges.append((dup, canonical))
+
+    print(f"\n[Normalise] {len(merges)} merge(s) found across {len(groups)} group(s)")
 
     if not merges:
         print("Nothing to do.")
@@ -165,37 +246,32 @@ async def _cleanup_pass(dry_run: bool = True):
     conn = get_connection()
     cur = conn.cursor()
     for old_name, canonical_name in merges:
-        # Get IDs
         cur.execute("SELECT id FROM ingredients WHERE name = ?", (old_name,))
         old_row = cur.fetchone()
         cur.execute("SELECT id FROM ingredients WHERE name = ?", (canonical_name,))
         canon_row = cur.fetchone()
 
         if not old_row or not canon_row:
-            print(f"  [!] Skipping '{old_name}' → '{canonical_name}': one not found in DB")
+            print(f"  [!] Skipping '{old_name}' -> '{canonical_name}': one not found")
             continue
 
         old_id = old_row["id"]
         canon_id = canon_row["id"]
 
-        # Re-link recipe_ingredients to canonical
         cur.execute(
             "UPDATE OR IGNORE recipe_ingredients SET ingredient_id = ? WHERE ingredient_id = ?",
             (canon_id, old_id),
         )
-        # Re-link aliases to canonical
         cur.execute(
             "UPDATE OR IGNORE ingredient_aliases SET ingredient_id = ? WHERE ingredient_id = ?",
             (canon_id, old_id),
         )
-        # Insert old name as an alias for the canonical
         cur.execute(
             "INSERT OR IGNORE INTO ingredient_aliases (alias, ingredient_id) VALUES (?, ?)",
             (old_name, canon_id),
         )
-        # Delete the old ingredient
         cur.execute("DELETE FROM ingredients WHERE id = ?", (old_id,))
-        print(f"  [DB] Merged '{old_name}' → '{canonical_name}'")
+        print(f"  [DB] Merged '{old_name}' -> '{canonical_name}'")
 
     conn.commit()
     conn.close()
@@ -204,6 +280,7 @@ async def _cleanup_pass(dry_run: bool = True):
 
 if __name__ == "__main__":
     import argparse
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Normalise existing ingredients in kitchen.db")
     parser.add_argument("--dry-run", action="store_true", help="Preview merges without writing")
     args = parser.parse_args()
