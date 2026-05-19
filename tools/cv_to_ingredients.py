@@ -34,11 +34,12 @@ For each item, provide:
 - name: common ingredient name (e.g. "chicken breast", "garlic", "soy sauce")
 - confidence: "high", "medium", or "low"
 - notes: brief note if uncertain (e.g. "blurry label", "similar to X")
+- expiry_date: if a best-before / expiry / use-by date is CLEARLY readable on the packaging, return it as "YYYY-MM-DD". If not visible or not applicable, return null.
 
 Return ONLY valid JSON in this exact format:
 {
   "ingredients": [
-    {"name": "...", "confidence": "high|medium|low", "notes": "..."},
+    {"name": "...", "confidence": "high|medium|low", "notes": "...", "expiry_date": "YYYY-MM-DD or null"},
     ...
   ],
   "uncertain": ["item1", "item2"]
@@ -240,17 +241,24 @@ async def resolve_uncertain_async(description: str) -> str | None:
     return None
 
 
-def upsert_ingredients(names: list[str], mode: str = "update"):
+def upsert_ingredients(
+    names: list[str],
+    mode: str = "update",
+    metadata: "dict[str, dict] | None" = None,
+):
     """
     mode='update': only set in_stock=1 for detected items, leave others unchanged.
     mode='restock': set in_stock=1 for detected items, set in_stock=0 for all others
                     (full replace — what's in the photo IS the current stock).
+    metadata: optional dict mapping name -> {"expiry_date": "YYYY-MM-DD"|None,
+                                              "storage_location": str|None}
     """
     from embeddings import encode
     from ingredient_index import _vec_to_blob
 
     index = get_index()
     names = [n.strip().lower() for n in names]
+    meta = metadata or {}
 
     # Pre-compute embeddings for new ingredients BEFORE opening the DB connection
     # so we never have two connections open simultaneously (SQLite single-writer).
@@ -263,15 +271,20 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
         cur.execute("UPDATE ingredients SET in_stock = 0, last_updated = datetime('now')")
 
     for name in names:
+        m = meta.get(name, {})
+        expiry = m.get("expiry_date") or None
+        storage = m.get("storage_location") or None
         cur.execute(
             """
-            INSERT INTO ingredients (name, in_stock, last_updated)
-            VALUES (?, 1, datetime('now'))
+            INSERT INTO ingredients (name, in_stock, last_updated, expiry_date, storage_location)
+            VALUES (?, 1, datetime('now'), ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 in_stock = 1,
-                last_updated = datetime('now')
+                last_updated = datetime('now'),
+                expiry_date = COALESCE(excluded.expiry_date, expiry_date),
+                storage_location = COALESCE(excluded.storage_location, storage_location)
             """,
-            (name,),
+            (name, expiry, storage),
         )
         if name in to_embed:
             cur.execute(

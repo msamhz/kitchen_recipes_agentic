@@ -33,6 +33,7 @@ from add_recipe import run as add_recipe_run
 from build_shopping_list import build_list
 from generate_aliases import run_async as generate_aliases_async
 from normalise import normalise_batch_async, normalise_ingredient_async, get_existing_ingredient_names
+from shelf_life import get_default_expiry, get_storage_guess, STORAGE_OPTIONS
 
 try:
     from check_calendar import check_wfh
@@ -198,6 +199,9 @@ def scan_tab():
     uploaded_paths: list[str] = []
     checkbox_refs: dict[str, ui.checkbox] = {}
     extra_items: list[str] = []
+    scanned_expiry_dates: dict[str, str | None] = {}
+    storage_refs: dict[str, "ui.select"] = {}
+    expiry_refs: dict[str, "ui.input"] = {}
 
     with ui.column().classes("w-full gap-4"):
         section_heading("Scan Kitchen", "photo_camera")
@@ -249,6 +253,9 @@ def scan_tab():
                     results_panel.set_visibility(False)
                     checkbox_refs.clear()
                     extra_items.clear()
+                    scanned_expiry_dates.clear()
+                    storage_refs.clear()
+                    expiry_refs.clear()
 
                 ui.button("Clear images", icon="clear_all", on_click=clear_images).props("flat").style(
                     f"color:#9a8a7a; width:100%; margin-top:0.25rem; font-size:0.82rem;"
@@ -302,24 +309,39 @@ def scan_tab():
             ui.separator().classes("my-2")
 
             async def on_confirm():
-                final = [n for n, cb in checkbox_refs.items() if cb.value] + extra_items
+                # Checklist items are already normalised — just filter checked ones
+                confirmed_from_scan = [n for n, cb in checkbox_refs.items() if cb.value]
+                # Extra manually-typed items need normalisation
+                extra_normalised: list[str] = []
+                if extra_items:
+                    scan_log.clear()
+                    log_panel.set_visibility(True)
+                    scan_log.push(f"Normalising {len(extra_items)} manually added item(s)...")
+                    extra_normalised = await normalise_batch_async(extra_items, log_fn=scan_log.push)
+
+                final = confirmed_from_scan + extra_normalised
                 if not final:
                     ui.notify("Nothing selected.", color="warning")
                     return
 
-                scan_log.clear()
                 log_panel.set_visibility(True)
                 scan_log.push(f"Saving {len(final)} ingredient(s)...")
 
-                final = await normalise_batch_async(final, log_fn=scan_log.push)
+                # Collect expiry/storage metadata from UI refs
+                item_meta: dict[str, dict] = {}
+                for name in confirmed_from_scan:
+                    stor = storage_refs.get(name)
+                    exp = expiry_refs.get(name)
+                    item_meta[name] = {
+                        "storage_location": stor.value if stor else None,
+                        "expiry_date": (exp.value.strip() or None) if exp else None,
+                    }
 
                 # Check stock status per ingredient before writing
                 conn = get_connection()
                 cur = conn.cursor()
                 for name in final:
-                    cur.execute(
-                        "SELECT in_stock FROM ingredients WHERE name = ?", (name,)
-                    )
+                    cur.execute("SELECT in_stock FROM ingredients WHERE name = ?", (name,))
                     row = cur.fetchone()
                     if row is None:
                         scan_log.push(f"[Stock]  {name}  —  added to stock")
@@ -329,11 +351,12 @@ def scan_tab():
                         scan_log.push(f"[Stock]  {name}  —  was out of stock, restocked")
                 conn.close()
 
-                upsert_ingredients(final, mode=mode.value)
+                upsert_ingredients(final, mode=mode.value, metadata=item_meta)
                 scan_log.push(f"Done — {len(final)} ingredient(s) saved.")
                 ui.notify(f"Saved {len(final)} ingredient(s)!", color="positive")
                 results_panel.set_visibility(False)
                 uploaded_paths.clear(); checkbox_refs.clear(); extra_items.clear()
+                scanned_expiry_dates.clear(); storage_refs.clear(); expiry_refs.clear()
                 checklist_col.clear(); extras_col.clear()
                 scan_status.set_text("")
                 asyncio.ensure_future(generate_aliases_async(new_only=True))
@@ -414,13 +437,62 @@ def scan_tab():
                 existing_names = [r["name"] for r in cur.fetchall()]
                 conn.close()
                 final_candidates = await deduplicate_async(final_candidates, existing_names)
-                scan_log.push(f"{len(final_candidates)} unique ingredient(s) after dedup — ready to review")
+
+                # Save CV-extracted expiry dates keyed by pre-norm name before normalising
+                pre_norm_expiry: dict[str, str | None] = {
+                    name: seen.get(name, {}).get("expiry_date")
+                    for name in final_candidates
+                }
+
+                scan_log.push(f"Normalising {len(final_candidates)} ingredient name(s)...")
+                final_candidates = await normalise_batch_async(final_candidates, log_fn=scan_log.push)
+
+                scan_log.push(f"{len(final_candidates)} unique ingredient(s) after normalisation — ready to review")
+
+                scanned_expiry_dates.clear()
+                for name in final_candidates:
+                    scanned_expiry_dates[name] = pre_norm_expiry.get(name)
+
+                _STORAGE_LABELS = {"fridge": "Fridge", "freezer": "Freezer", "pantry": "Pantry", "counter": "Counter"}
 
                 with checklist_col:
                     for name in final_candidates:
-                        cb = ui.checkbox(name, value=True).style("color:#2d2420;")
-                        cb.props("color=positive keep-color")
-                        checkbox_refs[name] = cb
+                        cv_date: str | None = scanned_expiry_dates.get(name)
+                        storage_guess = get_storage_guess(name)
+                        kb_date = get_default_expiry(name, storage_guess)
+                        pre_fill = cv_date or (kb_date.isoformat() if kb_date else "")
+                        date_src = " (from label)" if cv_date else (" (estimated)" if pre_fill else "")
+
+                        with ui.row().classes("w-full items-center gap-2 px-2 py-1 rounded-lg").style(
+                            "background:#fafaf8; border:1px solid #e4ddd4;"
+                        ):
+                            cb = ui.checkbox(value=True).props("color=positive keep-color dense")
+                            ui.label(name).style("color:#2d2420; font-size:0.9rem; flex:1; min-width:0;")
+
+                            stor_sel = ui.select(
+                                options=_STORAGE_LABELS,
+                                value=storage_guess,
+                            ).props("dense outlined").style("min-width:100px; max-width:110px; font-size:0.82rem;")
+
+                            exp_inp = ui.input(
+                                value=pre_fill,
+                                placeholder="YYYY-MM-DD",
+                            ).props("dense outlined").style(
+                                "width:122px; font-size:0.82rem;"
+                            )
+                            if date_src:
+                                exp_inp.tooltip(f"Expiry{date_src}")
+
+                            def _on_storage_change(e, inp=exp_inp, n=name):
+                                if not scanned_expiry_dates.get(n):
+                                    kb = get_default_expiry(n, e.value)
+                                    inp.set_value(kb.isoformat() if kb else "")
+
+                            stor_sel.on_value_change(_on_storage_change)
+
+                            checkbox_refs[name] = cb
+                            storage_refs[name] = stor_sel
+                            expiry_refs[name] = exp_inp
 
                 count_lbl.set_text(f"{len(final_candidates)} ingredient(s) detected")
                 results_panel.set_visibility(True)
@@ -1035,7 +1107,9 @@ def stock_tab():
                     stock_col.clear()
                     conn = get_connection()
                     cur = conn.cursor()
-                    cur.execute("SELECT id, name, in_stock FROM ingredients ORDER BY name")
+                    cur.execute(
+                        "SELECT id, name, in_stock, expiry_date, storage_location FROM ingredients ORDER BY name"
+                    )
                     rows = cur.fetchall()
                     conn.close()
 
@@ -1171,13 +1245,90 @@ def stock_tab():
 
 
 def _ingredient_row(row, in_stk: bool, refresh_fn):
+    from shelf_life import STORAGE_OPTIONS
     bg = "#f5f9f6" if in_stk else "#fdf6f6"
     border = f"border:1px solid {GREEN}44;" if in_stk else "border:1px solid #e8c8c8;"
+
+    expiry_str: str | None = row["expiry_date"] if "expiry_date" in row.keys() else None
+    storage_str: str | None = row["storage_location"] if "storage_location" in row.keys() else None
+
+    # Determine expiry label and colour
+    expiry_color = "#9a8a7a"
+    expiry_label = ""
+    if expiry_str:
+        try:
+            exp_date = date.fromisoformat(expiry_str)
+            days_left = (exp_date - date.today()).days
+            if days_left < 0:
+                expiry_label = f"exp {expiry_str} (expired)"
+                expiry_color = "#c4504a"
+            elif days_left <= 7:
+                expiry_label = f"exp {expiry_str} ({days_left}d)"
+                expiry_color = "#b87d2a"
+            else:
+                expiry_label = f"exp {expiry_str}"
+                expiry_color = "#5a7a5a"
+        except ValueError:
+            expiry_label = f"exp {expiry_str}"
+
     with ui.row().classes("items-center gap-2 px-2 py-1 rounded w-full").style(f"background:{bg}; {border}"):
         ui.icon("check" if in_stk else "close", size="0.9rem").style(
             f"color:{GREEN if in_stk else '#c4504a'};"
         )
-        ui.label(row["name"]).style("color:#2d2420; flex:1; font-size:0.88rem;")
+        ui.label(row["name"]).style("color:#2d2420; font-size:0.88rem; min-width:0;")
+
+        # Expiry badge
+        if expiry_label:
+            ui.label(expiry_label).style(
+                f"color:{expiry_color}; font-size:0.72rem; flex:1; min-width:0; "
+                "white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+            )
+        else:
+            ui.element("div").style("flex:1;")
+
+        # Edit expiry/storage button
+        def open_edit(n=row["name"], cur_exp=expiry_str, cur_stor=storage_str):
+            _STOR_LABELS = {"fridge": "Fridge", "freezer": "Freezer", "pantry": "Pantry", "counter": "Counter"}
+            with ui.dialog() as dlg, ui.card().style("min-width:280px; padding:1.25rem;"):
+                ui.label(n).style("font-weight:600; color:#2d2420; margin-bottom:0.5rem;")
+                stor_sel = ui.select(
+                    options=_STOR_LABELS,
+                    value=cur_stor or "pantry",
+                    label="Storage",
+                ).classes("w-full")
+                exp_inp = ui.input(
+                    label="Expiry date (YYYY-MM-DD)",
+                    value=cur_exp or "",
+                    placeholder="YYYY-MM-DD",
+                ).classes("w-full mt-2")
+
+                def save_edit():
+                    new_exp = exp_inp.value.strip() or None
+                    new_stor = stor_sel.value
+                    conn = get_connection()
+                    conn.execute(
+                        "UPDATE ingredients SET expiry_date=?, storage_location=? WHERE name=?",
+                        (new_exp, new_stor, n),
+                    )
+                    conn.commit()
+                    conn.close()
+                    dlg.close()
+                    refresh_fn()
+
+                def clear_expiry():
+                    exp_inp.set_value("")
+
+                with ui.row().classes("gap-2 mt-3 justify-end"):
+                    ui.button("Clear date", on_click=clear_expiry).props("flat").style("color:#9a8a7a; font-size:0.8rem;")
+                    ui.button("Cancel", on_click=dlg.close).props("flat").style("color:#9a8a7a;")
+                    ui.button("Save", on_click=save_edit).props("unelevated").style(
+                        f"background:{GREEN}; color:white; border-radius:6px;"
+                    )
+            dlg.open()
+
+        ui.button(icon="edit_calendar", on_click=open_edit).props("flat round dense").style(
+            "color:#9a8a7a; font-size:0.8rem; opacity:0.7;"
+        ).tooltip("Edit expiry / storage")
 
         def toggle(name=row["name"], cur=in_stk):
             mark_ingredients([name], in_stock=not cur)
