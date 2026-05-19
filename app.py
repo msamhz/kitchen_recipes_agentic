@@ -240,6 +240,19 @@ def scan_tab():
                 )
                 scan_status = ui.label("").style(MUTED)
 
+        # Live backend log — shown while scanning/saving
+        log_panel = ui.card().style(CARD2).classes("w-full")
+        log_panel.set_visibility(False)
+        with log_panel:
+            with ui.row().classes("items-center gap-2 mb-1"):
+                ui.icon("terminal", size="1rem").style(f"color:{AMBER};")
+                ui.label("Backend Log").style(f"color:{AMBER}; font-weight:600; font-size:0.85rem;")
+            scan_log = ui.log(max_lines=60).classes("w-full").style(
+                "font-family:monospace; font-size:0.78rem; color:#5a4a3a;"
+                " background:#fdf6ec; border-radius:6px; padding:0.5rem;"
+                " min-height:80px; max-height:220px; overflow-y:auto;"
+            )
+
         results_panel = ui.card().style(CARD).classes("w-full")
         results_panel.set_visibility(False)
         with results_panel:
@@ -279,9 +292,31 @@ def scan_tab():
                 if not final:
                     ui.notify("Nothing selected.", color="warning")
                     return
-                existing = get_existing_ingredient_names()
-                final = await normalise_batch_async(final, existing)
+
+                scan_log.clear()
+                log_panel.set_visibility(True)
+                scan_log.push(f"Saving {len(final)} ingredient(s)...")
+
+                final = await normalise_batch_async(final, log_fn=scan_log.push)
+
+                # Check stock status per ingredient before writing
+                conn = get_connection()
+                cur = conn.cursor()
+                for name in final:
+                    cur.execute(
+                        "SELECT in_stock FROM ingredients WHERE name = ?", (name,)
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        scan_log.push(f"[Stock]  {name}  —  added to stock")
+                    elif row["in_stock"]:
+                        scan_log.push(f"[Stock]  {name}  —  already in stock")
+                    else:
+                        scan_log.push(f"[Stock]  {name}  —  was out of stock, restocked")
+                conn.close()
+
                 upsert_ingredients(final, mode=mode.value)
+                scan_log.push(f"Done — {len(final)} ingredient(s) saved.")
                 ui.notify(f"Saved {len(final)} ingredient(s)!", color="positive")
                 results_panel.set_visibility(False)
                 uploaded_paths.clear(); checkbox_refs.clear(); extra_items.clear()
@@ -301,17 +336,26 @@ def scan_tab():
                 return
 
             scan_btn.disable()
+            scan_log.clear()
+            log_panel.set_visibility(True)
             scan_status.set_text("Scanning images in parallel...")
             checkbox_refs.clear(); extra_items.clear()
             checklist_col.clear(); extras_col.clear()
 
             try:
+                scan_log.push(f"Analysing {len(uploaded_paths)} image(s) with Claude Vision...")
                 all_results = await asyncio.gather(*[identify_ingredients_async(p) for p in uploaded_paths])
 
                 all_ingredients, all_uncertain = [], []
-                for r in all_results:
-                    all_ingredients.extend(r.get("ingredients", []))
-                    all_uncertain.extend(r.get("uncertain", []))
+                for i, r in enumerate(all_results):
+                    found = r.get("ingredients", [])
+                    uncertain = r.get("uncertain", [])
+                    scan_log.push(
+                        f"[Image {i+1}]  {len(found)} ingredient(s) detected"
+                        + (f", {len(uncertain)} uncertain" if uncertain else "")
+                    )
+                    all_ingredients.extend(found)
+                    all_uncertain.extend(uncertain)
 
                 seen: dict[str, dict] = {}
                 for item in all_ingredients:
@@ -334,19 +378,29 @@ def scan_tab():
                 to_resolve.extend(deduped_uncertain)
 
                 if to_resolve:
-                    scan_status.set_text(f"Resolving {len(to_resolve)} uncertain items...")
-                    resolved = await asyncio.gather(*[resolve_uncertain_async(d) for d in to_resolve])
-                    confirmed.extend([r for r in resolved if r])
+                    scan_status.set_text(f"Resolving {len(to_resolve)} uncertain item(s)...")
+                    scan_log.push(f"Resolving {len(to_resolve)} uncertain item(s)...")
+                    resolved_results = await asyncio.gather(
+                        *[resolve_uncertain_async(d) for d in to_resolve]
+                    )
+                    for desc, res in zip(to_resolve, resolved_results):
+                        if res:
+                            scan_log.push(f"[Resolve]  '{desc}'  →  {res}")
+                            confirmed.append(res)
+                        else:
+                            scan_log.push(f"[Resolve]  '{desc}'  —  could not identify, skipped")
 
                 final_candidates = sorted(set(confirmed))
 
                 scan_status.set_text("Deduplicating ingredient names...")
+                scan_log.push(f"Deduplicating {len(final_candidates)} candidate(s)...")
                 conn = get_connection()
                 cur = conn.cursor()
                 cur.execute("SELECT name FROM ingredients")
                 existing_names = [r["name"] for r in cur.fetchall()]
                 conn.close()
                 final_candidates = await deduplicate_async(final_candidates, existing_names)
+                scan_log.push(f"{len(final_candidates)} unique ingredient(s) after dedup — ready to review")
 
                 with checklist_col:
                     for name in final_candidates:
@@ -361,6 +415,7 @@ def scan_tab():
             except Exception as e:
                 ui.notify(f"Scan error: {e}", color="negative")
                 scan_status.set_text(f"Error: {e}")
+                scan_log.push(f"ERROR: {e}")
             finally:
                 scan_btn.enable()
 

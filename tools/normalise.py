@@ -142,15 +142,21 @@ async def normalise_ingredient_async(name: str, _existing: list[str] | None = No
 async def normalise_batch_async(
     names: list[str],
     _existing: list[str] | None = None,
+    log_fn=None,
 ) -> list[str]:
     """
     Normalise a batch of names.
     - Confident + new zones: resolved instantly via vectors, no LLM
     - Grey zone items: one parallel gather of small LLM calls (top-3 neighbours only)
+    log_fn: optional callable(str) — receives one line per decision for UI display.
     Returns deduplicated list.
     """
     if not names:
         return names
+
+    def _log(msg: str):
+        if log_fn:
+            log_fn(msg)
 
     index = get_index()
     results = [index.find(n.strip().lower()) for n in names]
@@ -160,10 +166,16 @@ async def normalise_batch_async(
 
     for i, r in enumerate(results):
         if r.zone == "confident":
+            if r.match == r.name:
+                _log(f"[Normalise] {r.name}  —  exact match, kept")
+            else:
+                _log(f"[Normalise] {r.name}  →  {r.match}  (merged, score {r.score:.2f})")
             confident_or_new.append((i, r.match))
         elif r.zone == "new":
+            _log(f"[Normalise] {r.name}  —  new ingredient")
             confident_or_new.append((i, r.name))
         else:
+            _log(f"[Normalise] {r.name}  —  checking with AI (score {r.score:.2f})...")
             grey_indices.append(i)
 
     # Resolve grey zone items in parallel — one small call each
@@ -186,7 +198,12 @@ async def normalise_batch_async(
         responses = await asyncio.gather(*grey_tasks)
         for resp, i in zip(responses, grey_indices):
             confirmed = _parse_grey_response(resp.content[0].text, results[i].neighbours)
-            grey_resolved.append(confirmed if confirmed else results[i].name)
+            if confirmed:
+                _log(f"[Normalise] {results[i].name}  →  {confirmed}  (AI merged)")
+                grey_resolved.append(confirmed)
+            else:
+                _log(f"[Normalise] {results[i].name}  —  AI kept as new")
+                grey_resolved.append(results[i].name)
 
     # Merge all results back in original order
     final: list[str] = [""] * len(names)
