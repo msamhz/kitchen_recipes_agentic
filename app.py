@@ -1175,6 +1175,20 @@ def _ingredient_row(row, in_stk: bool, refresh_fn):
             f"color:{'#c4504a' if in_stk else GREEN}; font-size:0.75rem; padding:0 0.25rem;"
         )
 
+        if not in_stk:
+            def delete(name=row["name"]):
+                conn = get_connection()
+                conn.execute("DELETE FROM ingredients WHERE name = ?", (name,))
+                conn.commit()
+                conn.close()
+                from ingredient_index import get_index
+                get_index().remove(name)
+                refresh_fn()
+
+            ui.button(icon="delete_outline", on_click=delete).props("flat round dense").style(
+                "color:#c4504a; opacity:0.6; font-size:0.8rem;"
+            ).tooltip("Permanently delete")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN PAGE
