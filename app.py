@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from db_init import init_db, get_connection
-from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, deduplicate_async, upsert_ingredients
+from cv_to_ingredients import identify_ingredients_async, resolve_uncertain_async, upsert_ingredients
 from match_recipes import match_recipes
 from update_stock import mark_recipe_cooked, mark_ingredients, get_required_ingredients
 from add_recipe import run as add_recipe_run
@@ -428,15 +428,6 @@ def scan_tab():
                             scan_log.push(f"[Resolve]  '{desc}'  —  could not identify, skipped")
 
                 final_candidates = sorted(set(confirmed))
-
-                scan_status.set_text("Deduplicating ingredient names...")
-                scan_log.push(f"Deduplicating {len(final_candidates)} candidate(s)...")
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("SELECT name FROM ingredients")
-                existing_names = [r["name"] for r in cur.fetchall()]
-                conn.close()
-                final_candidates = await deduplicate_async(final_candidates, existing_names)
 
                 # Save CV-extracted expiry dates keyed by pre-norm name before normalising
                 pre_norm_expiry: dict[str, str | None] = {
