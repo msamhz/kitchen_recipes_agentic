@@ -34,7 +34,28 @@ For each item, provide:
 - name: common ingredient name (e.g. "chicken breast", "garlic", "soy sauce")
 - confidence: "high", "medium", or "low"
 - notes: brief note if uncertain (e.g. "blurry label", "similar to X")
-- expiry_date: if a best-before / expiry / use-by date is CLEARLY readable on the packaging, return it as "YYYY-MM-DD". If not visible or not applicable, return null.
+- expiry_date: search the packaging carefully for a date. Return it as "YYYY-MM-DD" if clearly readable, else null.
+
+EXPIRY DATE — WHERE TO LOOK BY PACKAGE TYPE:
+- Bottles (sauce, fish sauce, soy sauce, oil): check the NECK near the cap, the BOTTOM of the bottle (embossed), and the top/bottom edge of the front label
+- Cans / tins: embossed on the TOP rim or BOTTOM rim; sometimes on the side label
+- Cartons (milk, juice, broth): printed on the TOP flap, the side panel, or near the pour spout
+- Plastic pouches / sachets: along the HEAT-SEALED edges (top or bottom seam)
+- Jars (paste, jam, sambal): underside of the LID or the bottom of the jar
+- Dairy tubs / yogurt: on the FOIL SEAL or the bottom of the tub
+- Bags (flour, rice, frozen goods): printed or stamped near the CLOSURE or on the back panel
+- Eggs: stamped on the shell or on the tray
+- Fresh produce (packaged): on the STICKER or TRAY LABEL
+
+COMMON DATE LABEL KEYWORDS (look for these near any date):
+- English: EXP, EXPIRY, BEST BEFORE, BB, USE BY, USE BEFORE, BBE, SELL BY
+- Malay: TARIKH LUPUT, LUPUT, GUNAKAN SEBELUM, BAIK SEBELUM
+- Chinese: 到期日, 保质期至, 最佳食用期, 生产日期 (manufacture date — ignore this one)
+- Format variants: DD/MM/YY, MM/YY, DD-MM-YYYY, YYYY-MM-DD, MON YYYY (e.g. "MAY 2026")
+  Convert any format you find to YYYY-MM-DD. For MM/YY with no day, use the last day of that month.
+  For "MAY 2026" style, use the last day: 2026-05-31.
+
+Only return a date if you can read it clearly. Do NOT guess. If the date is partially obscured, return null.
 
 Return ONLY valid JSON in this exact format:
 {
