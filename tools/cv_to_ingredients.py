@@ -246,16 +246,23 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
     mode='restock': set in_stock=1 for detected items, set in_stock=0 for all others
                     (full replace — what's in the photo IS the current stock).
     """
+    from embeddings import encode
+    from ingredient_index import _vec_to_blob
+
+    index = get_index()
+    names = [n.strip().lower() for n in names]
+
+    # Pre-compute embeddings for new ingredients BEFORE opening the DB connection
+    # so we never have two connections open simultaneously (SQLite single-writer).
+    to_embed = {n: encode(n) for n in names if n not in index.names}
+
     conn = get_connection()
     cur = conn.cursor()
 
     if mode == "restock":
-        # Mark everything out of stock first, then re-enable what was found
         cur.execute("UPDATE ingredients SET in_stock = 0, last_updated = datetime('now')")
 
-    index = get_index()
     for name in names:
-        name = name.strip().lower()
         cur.execute(
             """
             INSERT INTO ingredients (name, in_stock, last_updated)
@@ -266,12 +273,18 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
             """,
             (name,),
         )
-        # Embed and index any ingredient that doesn't have an embedding yet
-        if name not in index.names:
-            index.embed_and_save(name)
+        if name in to_embed:
+            cur.execute(
+                "UPDATE ingredients SET embedding = ? WHERE name = ?",
+                (_vec_to_blob(to_embed[name]), name),
+            )
 
     conn.commit()
     conn.close()
+
+    # Update in-memory index only after the connection is fully closed
+    for name, vec in to_embed.items():
+        index.add(name, vec)
 
 
 def run(image_path: str, mode: str = "update"):

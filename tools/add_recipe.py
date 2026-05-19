@@ -184,10 +184,17 @@ def save_recipe(recipe: dict) -> int:
     # Clear old ingredient links for this recipe (re-linking below)
     cur.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
 
+    from embeddings import encode
+    from ingredient_index import _vec_to_blob
+
     index = get_index()
-    for ing in recipe.get("ingredients", []):
-        name = normalise_ingredient(ing["name"].strip().lower())
-        # Upsert ingredient (in_stock left unchanged if already exists)
+    # Normalise all ingredient names first (before opening any DB connection)
+    ing_names = [normalise_ingredient(i["name"].strip().lower()) for i in recipe.get("ingredients", [])]
+
+    # Pre-compute embeddings for new ingredients before opening the DB connection
+    to_embed = {n: encode(n) for n in ing_names if n not in index.names}
+
+    for ing, name in zip(recipe.get("ingredients", []), ing_names):
         cur.execute(
             """
             INSERT INTO ingredients (name, in_stock)
@@ -196,11 +203,13 @@ def save_recipe(recipe: dict) -> int:
             """,
             (name,),
         )
+        if name in to_embed:
+            cur.execute(
+                "UPDATE ingredients SET embedding = ? WHERE name = ?",
+                (_vec_to_blob(to_embed[name]), name),
+            )
         cur.execute("SELECT id FROM ingredients WHERE name = ?", (name,))
         ing_id = cur.fetchone()["id"]
-        # Embed and index any ingredient that doesn't have an embedding yet
-        if name not in index.names:
-            index.embed_and_save(name)
 
         cur.execute(
             "INSERT INTO recipe_ingredients (recipe_id, ingredient_id, is_optional) VALUES (?, ?, ?)",
