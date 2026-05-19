@@ -28,7 +28,7 @@ from db_init import get_connection
 from embeddings import encode, encode_batch, top_matches
 
 CONFIDENT = 0.85
-GREY_LOW  = 0.75
+GREY_LOW  = 0.70
 
 
 @dataclass
