@@ -34,11 +34,51 @@ For each item, provide:
 - name: common ingredient name (e.g. "chicken breast", "garlic", "soy sauce")
 - confidence: "high", "medium", or "low"
 - notes: brief note if uncertain (e.g. "blurry label", "similar to X")
+- expiry_date: search the packaging carefully for a date. Return it as "YYYY-MM-DD" if clearly readable, else null.
+
+EXPIRY DATE — WHERE TO LOOK BY PACKAGE TYPE:
+- Bottles (sauce, fish sauce, soy sauce, oil): ** PRIORITY: inspect the CAP ITSELF first **
+    → TOP FACE of the cap (look straight down at it — date is often ink-jetted or laser-stamped here)
+    → SIDE BAND of the cap (the cylindrical rim, may have "EXP DD/MM/YY" stamped in small font)
+    → Neck of the bottle just BELOW the cap
+    → BOTTOM of the bottle (embossed or ink-jetted)
+    → Top or bottom edge of the front label
+  NOTE: for Southeast Asian sauce bottles (Singapore/Malaysia/Thailand) the cap is the #1 location.
+  A lone date printed on the cap with NO keyword prefix IS the expiry date — caps don't carry manufacture dates.
+- Cans / tins: embossed on the TOP rim or BOTTOM rim; sometimes on the side label
+- Cartons (milk, juice, broth): printed on the TOP flap, the side panel, or near the pour spout
+- Plastic pouches / sachets: along the HEAT-SEALED edges (top or bottom seam)
+- Jars (paste, jam, sambal): underside of the LID or the bottom of the jar
+- Dairy tubs / yogurt: on the FOIL SEAL or the bottom of the tub
+- Bags (flour, rice, frozen goods): printed or stamped near the CLOSURE or on the back panel
+- Eggs: stamped on the shell or on the tray
+- Fresh produce (packaged): on the STICKER or TRAY LABEL
+
+COMMON DATE LABEL KEYWORDS (look for these near any date):
+- English: EXP, EXPIRY, BEST BEFORE, BB, USE BY, USE BEFORE, BBE, SELL BY
+- Malay: TARIKH LUPUT, LUPUT, GUNAKAN SEBELUM, BAIK SEBELUM
+- Chinese: 到期日, 保质期至, 最佳食用期, 生产日期 (manufacture date — ignore this one)
+- No keyword: a date printed alone on the cap or lid is ALWAYS the expiry — treat it as such.
+
+DATE FORMAT RULES — Singapore/Malaysia products almost always use DD/MM/YY or DD/MM/YYYY:
+- DD/MM/YY  → day first, e.g. 18/05/26 = 2026-05-18  (NOT May 18 interpreted as US MM/DD)
+- DD/MM/YYYY → e.g. 31/10/2025 = 2025-10-31
+- MM/YY with no day → use the last day of that month: 05/26 = 2026-05-31
+- MON YYYY → use the last day: "MAY 2026" = 2026-05-31
+- YYYY-MM-DD → already ISO, use as-is
+Convert whatever format you read to YYYY-MM-DD.
+
+BATCH/LOT CODE vs DATE — do NOT confuse these:
+- Batch codes look like: 42019696PC, L2304A, MFG2024083, 09 04 0001  — alphanumeric, NOT dates
+- A real date has a recognisable day/month/year pattern (numbers between 01-31 / 01-12 / 20xx or YY)
+- If you see both a date AND a batch code near each other, only return the date
+
+Only return a date if you can read it clearly. Do NOT guess. If the date is partially obscured, return null.
 
 Return ONLY valid JSON in this exact format:
 {
   "ingredients": [
-    {"name": "...", "confidence": "high|medium|low", "notes": "..."},
+    {"name": "...", "confidence": "high|medium|low", "notes": "...", "expiry_date": "YYYY-MM-DD or null"},
     ...
   ],
   "uncertain": ["item1", "item2"]
@@ -240,17 +280,24 @@ async def resolve_uncertain_async(description: str) -> str | None:
     return None
 
 
-def upsert_ingredients(names: list[str], mode: str = "update"):
+def upsert_ingredients(
+    names: list[str],
+    mode: str = "update",
+    metadata: "dict[str, dict] | None" = None,
+):
     """
     mode='update': only set in_stock=1 for detected items, leave others unchanged.
     mode='restock': set in_stock=1 for detected items, set in_stock=0 for all others
                     (full replace — what's in the photo IS the current stock).
+    metadata: optional dict mapping name -> {"expiry_date": "YYYY-MM-DD"|None,
+                                              "storage_location": str|None}
     """
     from embeddings import encode
     from ingredient_index import _vec_to_blob
 
     index = get_index()
     names = [n.strip().lower() for n in names]
+    meta = metadata or {}
 
     # Pre-compute embeddings for new ingredients BEFORE opening the DB connection
     # so we never have two connections open simultaneously (SQLite single-writer).
@@ -263,15 +310,20 @@ def upsert_ingredients(names: list[str], mode: str = "update"):
         cur.execute("UPDATE ingredients SET in_stock = 0, last_updated = datetime('now')")
 
     for name in names:
+        m = meta.get(name, {})
+        expiry = m.get("expiry_date") or None
+        storage = m.get("storage_location") or None
         cur.execute(
             """
-            INSERT INTO ingredients (name, in_stock, last_updated)
-            VALUES (?, 1, datetime('now'))
+            INSERT INTO ingredients (name, in_stock, last_updated, expiry_date, storage_location)
+            VALUES (?, 1, datetime('now'), ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 in_stock = 1,
-                last_updated = datetime('now')
+                last_updated = datetime('now'),
+                expiry_date = COALESCE(excluded.expiry_date, expiry_date),
+                storage_location = COALESCE(excluded.storage_location, storage_location)
             """,
-            (name,),
+            (name, expiry, storage),
         )
         if name in to_embed:
             cur.execute(

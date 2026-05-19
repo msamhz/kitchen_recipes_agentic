@@ -58,6 +58,8 @@ def init_db():
         "ALTER TABLE recipes ADD COLUMN difficulty TEXT",
         "ALTER TABLE recipes ADD COLUMN prep_time TEXT",
         "ALTER TABLE ingredients ADD COLUMN embedding BLOB",
+        "ALTER TABLE ingredients ADD COLUMN expiry_date TEXT",
+        "ALTER TABLE ingredients ADD COLUMN storage_location TEXT",
     ]:
         try:
             cur.execute(sql)
