@@ -440,9 +440,19 @@ def scan_tab():
 
                 scan_log.push(f"{len(final_candidates)} unique ingredient(s) after normalisation — ready to review")
 
+                # Map CV expiry dates to canonical names.
+                # Direct lookup first (name didn't change), then fallback: find any pre-norm
+                # name that contains the canonical as a substring (e.g. "maggi tomato sauce"
+                # → "tomato sauce" — canonical is a suffix/core of the original brand name).
                 scanned_expiry_dates.clear()
                 for name in final_candidates:
-                    scanned_expiry_dates[name] = pre_norm_expiry.get(name)
+                    cv_date = pre_norm_expiry.get(name)
+                    if cv_date is None:
+                        for pre_name, exp in pre_norm_expiry.items():
+                            if exp and name in pre_name:
+                                cv_date = exp
+                                break
+                    scanned_expiry_dates[name] = cv_date
 
                 _STORAGE_LABELS = {"fridge": "Fridge", "freezer": "Freezer", "pantry": "Pantry", "counter": "Counter"}
 
@@ -453,6 +463,10 @@ def scan_tab():
                         kb_date = get_default_expiry(name, storage_guess)
                         pre_fill = cv_date or (kb_date.isoformat() if kb_date else "")
                         date_src = " (from label)" if cv_date else (" (estimated)" if pre_fill else "")
+                        if cv_date:
+                            scan_log.push(f"[Expiry]  {name}  —  {cv_date}  (read from label)")
+                        elif pre_fill:
+                            scan_log.push(f"[Expiry]  {name}  —  {pre_fill}  (KB estimate, no label found)")
 
                         with ui.row().classes("w-full items-center gap-2 px-2 py-1 rounded-lg").style(
                             "background:#fafaf8; border:1px solid #e4ddd4;"

@@ -37,7 +37,14 @@ For each item, provide:
 - expiry_date: search the packaging carefully for a date. Return it as "YYYY-MM-DD" if clearly readable, else null.
 
 EXPIRY DATE — WHERE TO LOOK BY PACKAGE TYPE:
-- Bottles (sauce, fish sauce, soy sauce, oil): check the NECK near the cap, the BOTTOM of the bottle (embossed), and the top/bottom edge of the front label
+- Bottles (sauce, fish sauce, soy sauce, oil): ** PRIORITY: inspect the CAP ITSELF first **
+    → TOP FACE of the cap (look straight down at it — date is often ink-jetted or laser-stamped here)
+    → SIDE BAND of the cap (the cylindrical rim, may have "EXP DD/MM/YY" stamped in small font)
+    → Neck of the bottle just BELOW the cap
+    → BOTTOM of the bottle (embossed or ink-jetted)
+    → Top or bottom edge of the front label
+  NOTE: for Southeast Asian sauce bottles (Singapore/Malaysia/Thailand) the cap is the #1 location.
+  A lone date printed on the cap with NO keyword prefix IS the expiry date — caps don't carry manufacture dates.
 - Cans / tins: embossed on the TOP rim or BOTTOM rim; sometimes on the side label
 - Cartons (milk, juice, broth): printed on the TOP flap, the side panel, or near the pour spout
 - Plastic pouches / sachets: along the HEAT-SEALED edges (top or bottom seam)
@@ -51,9 +58,20 @@ COMMON DATE LABEL KEYWORDS (look for these near any date):
 - English: EXP, EXPIRY, BEST BEFORE, BB, USE BY, USE BEFORE, BBE, SELL BY
 - Malay: TARIKH LUPUT, LUPUT, GUNAKAN SEBELUM, BAIK SEBELUM
 - Chinese: 到期日, 保质期至, 最佳食用期, 生产日期 (manufacture date — ignore this one)
-- Format variants: DD/MM/YY, MM/YY, DD-MM-YYYY, YYYY-MM-DD, MON YYYY (e.g. "MAY 2026")
-  Convert any format you find to YYYY-MM-DD. For MM/YY with no day, use the last day of that month.
-  For "MAY 2026" style, use the last day: 2026-05-31.
+- No keyword: a date printed alone on the cap or lid is ALWAYS the expiry — treat it as such.
+
+DATE FORMAT RULES — Singapore/Malaysia products almost always use DD/MM/YY or DD/MM/YYYY:
+- DD/MM/YY  → day first, e.g. 18/05/26 = 2026-05-18  (NOT May 18 interpreted as US MM/DD)
+- DD/MM/YYYY → e.g. 31/10/2025 = 2025-10-31
+- MM/YY with no day → use the last day of that month: 05/26 = 2026-05-31
+- MON YYYY → use the last day: "MAY 2026" = 2026-05-31
+- YYYY-MM-DD → already ISO, use as-is
+Convert whatever format you read to YYYY-MM-DD.
+
+BATCH/LOT CODE vs DATE — do NOT confuse these:
+- Batch codes look like: 42019696PC, L2304A, MFG2024083, 09 04 0001  — alphanumeric, NOT dates
+- A real date has a recognisable day/month/year pattern (numbers between 01-31 / 01-12 / 20xx or YY)
+- If you see both a date AND a batch code near each other, only return the date
 
 Only return a date if you can read it clearly. Do NOT guess. If the date is partially obscured, return null.
 

@@ -151,24 +151,63 @@ def get_storage_guess(ingredient_name: str) -> str:
     """
     Guess the most likely storage location for an ingredient.
     Returns one of: fridge, freezer, pantry, counter.
+
+    Longest keyword match wins — so "fish sauce" (len 10) beats "fish" (len 4),
+    correctly returning pantry instead of fridge.
     """
     name_lower = ingredient_name.lower().strip()
-    fridge_keywords = (
-        "chicken", "beef", "pork", "fish", "seafood", "prawn", "shrimp",
-        "milk", "cream", "butter", "cheese", "yogurt", "egg", "telur",
-        "tofu", "tahu", "tempe", "leftovers", "broccoli", "leafy",
-        "spinach", "lettuce", "kangkung",
-    )
-    freezer_keywords = ("frozen", "ice cream", "ais krim")
-    counter_keywords = ("banana", "pisang", "tomato", "tomat", "avocado", "alpukat")
 
-    for kw in freezer_keywords:
-        if kw in name_lower:
-            return "freezer"
-    for kw in fridge_keywords:
-        if kw in name_lower:
-            return "fridge"
-    for kw in counter_keywords:
-        if kw in name_lower:
-            return "counter"
-    return "pantry"
+    # (keywords, storage) — put multi-word phrases before single words so they
+    # can win via longest-match when both are present in the ingredient name.
+    _GUESS_RULES: list[tuple[tuple[str, ...], str]] = [
+        # Freezer
+        (("frozen", "ice cream", "ais krim"), "freezer"),
+        # Pantry condiments — specific multi-word phrases listed before bare words
+        (("fish sauce", "sos ikan", "fish ball", "fishball",
+          "fish cake", "fish fingers"), "pantry"),
+        (("tomato sauce", "tomato paste", "tomato ketchup", "ketchup",
+          "tomato puree"), "pantry"),
+        (("soy sauce", "dark soy", "light soy", "kicap", "kecap",
+          "oyster sauce", "sos tiram", "chilli sauce", "sos cili",
+          "sriracha", "tabasco", "sambal", "sesame oil", "minyak bijan",
+          "coconut milk", "santan"), "pantry"),
+        (("cooking oil", "vegetable oil", "olive oil", "sunflower oil",
+          "palm oil", "canola oil"), "pantry"),
+        (("vinegar", "cuka", "honey", "madu",
+          "sugar", "gula", "salt", "garam",
+          "rice", "beras", "flour", "tepung",
+          "pasta", "spaghetti", "noodle", "mee"), "pantry"),
+        # Fridge — meats & seafood
+        (("chicken", "poultry", "duck", "turkey",
+          "beef", "steak", "pork", "bacon",
+          "prawn", "shrimp", "squid", "crab", "seafood",
+          "salmon", "tuna", "cod", "tilapia", "mackerel"), "fridge"),
+        (("fish", "ikan"), "fridge"),     # generic fish — short, after "fish sauce" etc.
+        # Fridge — dairy & eggs
+        (("milk", "susu", "cream", "butter", "mentega",
+          "cheese", "keju", "yogurt", "yoghurt",
+          "egg", "telur"), "fridge"),
+        # Fridge — tofu & produce
+        (("tofu", "tahu", "tempe", "tempeh"), "fridge"),
+        (("broccoli", "cauliflower", "leafy", "spinach",
+          "lettuce", "kangkung", "bayam",
+          "cucumber", "timun", "capsicum"), "fridge"),
+        # Counter
+        (("banana", "pisang", "avocado", "alpukat"), "counter"),
+        (("tomato", "tomat"), "counter"),  # fresh tomato — after "tomato sauce" caught above
+    ]
+
+    # "frozen ..." always means freezer regardless of what follows
+    if "frozen" in name_lower:
+        return "freezer"
+
+    best_len = 0
+    best_storage = "pantry"
+
+    for keywords, storage in _GUESS_RULES:
+        for kw in keywords:
+            if kw in name_lower and len(kw) > best_len:
+                best_len = len(kw)
+                best_storage = storage
+
+    return best_storage
