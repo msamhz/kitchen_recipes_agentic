@@ -1004,9 +1004,19 @@ def stock_tab():
                     ui.label("Current Stock").style(TEXT + " font-weight:600;")
                     ui.button(icon="refresh", on_click=lambda: load_stock()).props("flat round dense").style("color:#9a8a7a;")
 
+                # Search input
+                with ui.row().classes("w-full items-center gap-1 mb-1"):
+                    ui.icon("search", size="1.1rem").style(f"color:{AMBER}; flex-shrink:0;")
+                    stock_search = ui.input(placeholder="Search ingredients...").classes("flex-1").style(
+                        "color:#2d2420; font-size:0.9rem;"
+                    )
+                    clear_btn = ui.button(icon="close").props("flat round dense").style(
+                        "color:#9a8a7a; opacity:0;"
+                    )
+
                 stock_col = ui.column().classes("w-full gap-1")
 
-                def load_stock():
+                def load_stock(query: str = ""):
                     stock_col.clear()
                     conn = get_connection()
                     cur = conn.cursor()
@@ -1014,25 +1024,53 @@ def stock_tab():
                     rows = cur.fetchall()
                     conn.close()
 
+                    q = query.strip().lower()
+                    if q:
+                        rows = [r for r in rows if q in r["name"].lower()]
+
                     in_s = [r for r in rows if r["in_stock"]]
                     out_s = [r for r in rows if not r["in_stock"]]
 
                     with stock_col:
-                        if not rows:
+                        if not rows and not q:
                             ui.label("No ingredients yet — scan your kitchen!").style(MUTED)
                             return
+                        if not rows and q:
+                            ui.label(f'No results for "{q}"').style(MUTED)
+                            return
+
+                        # Pass current query into the refresh callback so toggling
+                        # stock status doesn't reset the search filter.
+                        refresh = lambda: load_stock(stock_search.value.strip())
 
                         if in_s:
                             ui.label(f"In Stock  ({len(in_s)})").style(f"color:{GREEN}; font-size:0.78rem; font-weight:700; margin-top:0.25rem;")
                             with ui.column().classes("w-full gap-1").style("max-height:260px; overflow-y:auto;"):
                                 for r in in_s:
-                                    _ingredient_row(r, True, load_stock)
+                                    _ingredient_row(r, True, refresh)
+                        elif q:
+                            ui.label("No in-stock matches").style(MUTED + " font-size:0.78rem;")
 
                         if out_s:
                             ui.label(f"Out of Stock  ({len(out_s)})").style("color:#c4504a; font-size:0.78rem; font-weight:700; margin-top:0.75rem;")
                             with ui.column().classes("w-full gap-1").style("max-height:200px; overflow-y:auto;"):
                                 for r in out_s:
-                                    _ingredient_row(r, False, load_stock)
+                                    _ingredient_row(r, False, refresh)
+                        elif q and in_s:
+                            ui.label("No out-of-stock matches").style(MUTED + " font-size:0.78rem; margin-top:0.5rem;")
+
+                def on_search(e):
+                    q = e.value.strip()
+                    clear_btn.style(f"color:#9a8a7a; opacity:{'1' if q else '0'};")
+                    load_stock(q)
+
+                def on_clear():
+                    stock_search.set_value("")
+                    clear_btn.style("color:#9a8a7a; opacity:0;")
+                    load_stock()
+
+                stock_search.on_value_change(on_search)
+                clear_btn.on("click", on_clear)
 
                 ui.separator().classes("my-2")
                 ui.label("Add ingredient manually").style(MUTED)
@@ -1049,7 +1087,7 @@ def stock_tab():
                             ui.notify(f"Normalised to: {canonical}", color="info")
                         upsert_ingredients([canonical], mode="update")
                         manual.value = ""
-                        load_stock()
+                        load_stock(stock_search.value.strip())
                         ui.notify(f"Added: {canonical}", color="positive")
 
                     manual.on("keydown.enter", add_manual)
