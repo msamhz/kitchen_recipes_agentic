@@ -28,6 +28,7 @@ _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
 from clients import sync_client as client
+from normalise import normalise_ingredient, get_existing_ingredient_names
 
 PARSE_PROMPT = """You are a recipe parser. Extract the recipe from the text below.
 
@@ -182,8 +183,9 @@ def save_recipe(recipe: dict) -> int:
     # Clear old ingredient links for this recipe (re-linking below)
     cur.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
 
+    existing_names = get_existing_ingredient_names()
     for ing in recipe.get("ingredients", []):
-        name = ing["name"].strip().lower()
+        name = normalise_ingredient(ing["name"].strip().lower(), existing_names)
         # Upsert ingredient (in_stock left unchanged if already exists)
         cur.execute(
             """
@@ -195,6 +197,9 @@ def save_recipe(recipe: dict) -> int:
         )
         cur.execute("SELECT id FROM ingredients WHERE name = ?", (name,))
         ing_id = cur.fetchone()["id"]
+        # Keep existing_names current so later ingredients in this recipe normalise against new additions
+        if name not in existing_names:
+            existing_names.append(name)
 
         cur.execute(
             "INSERT INTO recipe_ingredients (recipe_id, ingredient_id, is_optional) VALUES (?, ?, ?)",

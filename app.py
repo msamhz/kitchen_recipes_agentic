@@ -32,6 +32,7 @@ from update_stock import mark_recipe_cooked, mark_ingredients, get_required_ingr
 from add_recipe import run as add_recipe_run
 from build_shopping_list import build_list
 from generate_aliases import run_async as generate_aliases_async
+from normalise import normalise_batch_async, normalise_ingredient_async, get_existing_ingredient_names
 
 try:
     from check_calendar import check_wfh
@@ -272,11 +273,13 @@ def scan_tab():
 
             ui.separator().classes("my-2")
 
-            def on_confirm():
+            async def on_confirm():
                 final = [n for n, cb in checkbox_refs.items() if cb.value] + extra_items
                 if not final:
                     ui.notify("Nothing selected.", color="warning")
                     return
+                existing = get_existing_ingredient_names()
+                final = await normalise_batch_async(final, existing)
                 upsert_ingredients(final, mode=mode.value)
                 ui.notify(f"Saved {len(final)} ingredient(s)!", color="positive")
                 results_panel.set_visibility(False)
@@ -981,14 +984,18 @@ def stock_tab():
                 with ui.row().classes("w-full gap-2"):
                     manual = ui.input(placeholder="e.g. miso paste").classes("flex-1").style("color:#2d2420;")
 
-                    def add_manual():
+                    async def add_manual():
                         name = manual.value.strip().lower()
                         if not name:
                             return
-                        upsert_ingredients([name], mode="update")
+                        existing = get_existing_ingredient_names()
+                        canonical = await normalise_ingredient_async(name, existing)
+                        if canonical != name:
+                            ui.notify(f"Normalised to: {canonical}", color="info")
+                        upsert_ingredients([canonical], mode="update")
                         manual.value = ""
                         load_stock()
-                        ui.notify(f"Added: {name}", color="positive")
+                        ui.notify(f"Added: {canonical}", color="positive")
 
                     manual.on("keydown.enter", add_manual)
                     ui.button("Add", on_click=add_manual).props("unelevated").style(

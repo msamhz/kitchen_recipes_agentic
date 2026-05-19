@@ -22,6 +22,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(__file__))
 from db_init import get_connection, init_db
 from clients import sync_client as client, async_client
+from normalise import normalise_batch_async, get_existing_ingredient_names
 
 IDENTIFY_PROMPT = """You are a kitchen inventory assistant with excellent food recognition skills.
 
@@ -350,6 +351,9 @@ async def run_async(image_path: str, mode: str = "update"):
                 print(f"      -> '{desc}' skipped (could not resolve)")
 
     if confirmed_names:
+        existing = get_existing_ingredient_names()
+        print(f"[Normalise] Checking {len(confirmed_names)} ingredient(s) against {len(existing)} in DB...")
+        confirmed_names = await normalise_batch_async(confirmed_names, existing)
         upsert_ingredients(confirmed_names, mode=mode)
         print(f"\n[DB] Upserted {len(confirmed_names)} ingredients (mode={mode})")
     else:
