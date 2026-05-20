@@ -47,6 +47,11 @@ TMP_DIR.mkdir(exist_ok=True)
 init_db()
 
 @nicegui_app.on_startup
+async def _preload_embedding_model():
+    from embeddings import get_model
+    await asyncio.to_thread(get_model)
+
+@nicegui_app.on_startup
 async def _startup_aliases():
     await generate_aliases_async(new_only=True)
 

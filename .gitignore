@@ -24,3 +24,6 @@ kitchen.db
 
 # Temp files
 .tmp/
+
+/images
+/logos

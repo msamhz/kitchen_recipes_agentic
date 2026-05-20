@@ -11,31 +11,11 @@ Subsequent runs load from cache instantly.
 """
 
 import os
-import ssl
 import sys
 import numpy as np
 
 # Suppress tokenizer parallelism warning
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-# Bypass corporate SSL inspection.
-# huggingface_hub uses httpx, so we must patch it before any HF import.
-ssl._create_default_https_context = ssl._create_unverified_context
-os.environ.setdefault("CURL_CA_BUNDLE", "")
-os.environ.setdefault("REQUESTS_CA_BUNDLE", "")
-
-import httpx
-_orig_client_init = httpx.Client.__init__
-def _ssl_bypass_client(self, *args, **kwargs):
-    kwargs["verify"] = False
-    _orig_client_init(self, *args, **kwargs)
-httpx.Client.__init__ = _ssl_bypass_client
-
-_orig_async_init = httpx.AsyncClient.__init__
-def _ssl_bypass_async(self, *args, **kwargs):
-    kwargs["verify"] = False
-    _orig_async_init(self, *args, **kwargs)
-httpx.AsyncClient.__init__ = _ssl_bypass_async
 
 _MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 _model = None
@@ -46,8 +26,12 @@ def get_model():
     if _model is None:
         from sentence_transformers import SentenceTransformer
         print(f"[Embeddings] Loading model '{_MODEL_NAME}'...")
-        _model = SentenceTransformer(_MODEL_NAME)
-        print("[Embeddings] Model ready.")
+        try:
+            _model = SentenceTransformer(_MODEL_NAME, backend="onnx")
+            print("[Embeddings] Model ready (ONNX).")
+        except Exception:
+            _model = SentenceTransformer(_MODEL_NAME)
+            print("[Embeddings] Model ready (PyTorch).")
     return _model
 
 
@@ -65,6 +49,12 @@ def encode_batch(texts: list[str]) -> np.ndarray:
     model = get_model()
     vecs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
     return vecs.astype(np.float32)
+
+
+async def encode_batch_async(texts: list[str]) -> np.ndarray:
+    """Non-blocking version — runs encode_batch in a thread so the event loop stays free."""
+    import asyncio
+    return await asyncio.to_thread(encode_batch, texts)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -90,7 +80,6 @@ def top_matches(
 
 
 if __name__ == "__main__":
-    # Smoke test
     print("Testing encode...")
     v1 = encode("fish sauce")
     v2 = encode("tiparos fish sauce")
