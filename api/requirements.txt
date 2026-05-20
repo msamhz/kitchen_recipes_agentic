@@ -1,0 +1,10 @@
+fastapi
+mangum
+psycopg2-binary
+anthropic
+sentence-transformers
+optimum[onnxruntime]
+Pillow
+numpy
+python-multipart
+python-dotenv
