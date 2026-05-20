@@ -1,0 +1,14 @@
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+*.db
+.env
+images/
+logos/
+.tmp/
+app.py
+credentials.json
+token.json
+frontend/

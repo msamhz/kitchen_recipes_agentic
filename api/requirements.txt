@@ -7,3 +7,4 @@ optimum[onnxruntime]
 Pillow
 numpy
 python-multipart
+python-dotenv
