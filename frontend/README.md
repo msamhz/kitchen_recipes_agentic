@@ -1,16 +1,45 @@
-# React + Vite
+# Kitchen — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React PWA built with Vite + Tailwind v4.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+```
 
-## React Compiler
+Create `frontend/.env.local`:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```
+VITE_API_URL=https://<your-api-gateway-url>
+```
 
-## Expanding the ESLint configuration
+## Dev
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm run dev       # http://localhost:5173
+```
+
+## Deploy to Vercel
+
+```bash
+# First time — needs SSL workaround on some corporate networks
+NODE_TLS_REJECT_UNAUTHORIZED=0 vercel --prod --yes
+
+# Update a Vercel env var
+echo "value" | NODE_TLS_REJECT_UNAUTHORIZED=0 vercel env add VAR_NAME production
+```
+
+## Auth
+
+The app is protected by Vercel Edge Middleware (`middleware.js`) using HTTP Basic Auth.  
+The password is stored as `AUTH_PASSWORD` in the Vercel project environment — not in this repo.
+
+## Pages
+
+| Page | File | Description |
+|------|------|-------------|
+| Scan | `src/pages/ScanPage.jsx` | Camera/file scan, expiry extraction, confirm to pantry |
+| Pantry | `src/pages/StockPage.jsx` | Ingredient cards, search, expiry urgency, inline edit |
+| Recipes | `src/pages/RecipesPage.jsx` | Difficulty/time filters, expiry bar, Mark Cooked, URL import |
+| Shopping | `src/pages/ShoppingPage.jsx` | Cart-style list, mark as bought |
