@@ -2,6 +2,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
+import json
+import os
+import concurrent.futures
 from api.db import get_connection
 
 router = APIRouter()
@@ -160,6 +163,206 @@ def create_recipe(body: RecipeCreate):
     conn.commit()
     conn.close()
     return {"created": recipe_id, "name": body.name}
+
+
+@router.get("/shopping-list")
+def get_shopping_list():
+    """Return missing required ingredients with raw pairs for client-side filtering.
+    All recipes are returned as filter options; pairs only cover missing ingredients."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Raw pairs: only missing required ingredients (aliases respected)
+    cur.execute("""
+        SELECT i.name AS ingredient, r.id AS recipe_id, r.name AS recipe_name
+        FROM recipes r
+        JOIN recipe_ingredients ri ON ri.recipe_id = r.id
+        JOIN ingredients i ON i.id = ri.ingredient_id
+        WHERE ri.is_optional = 0
+          AND i.in_stock = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM ingredient_aliases ia
+              JOIN ingredients i2 ON i2.id = ia.ingredient_id
+              WHERE ia.alias = i.name AND i2.in_stock = 1
+          )
+        ORDER BY i.name, r.name
+    """)
+    pairs = [dict(r) for r in cur.fetchall()]
+
+    # ALL recipes as filter options (not just can_shop)
+    cur.execute("SELECT id, name FROM recipes ORDER BY name")
+    recipes = [dict(r) for r in cur.fetchall()]
+
+    conn.close()
+    return {"pairs": pairs, "recipes": recipes}
+
+
+_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}
+
+_PARSE_PROMPT = """You are a recipe parser. Extract the recipe from the text below.
+
+Return ONLY valid JSON in this exact format:
+{{
+  "name": "Recipe Name",
+  "instructions": "Full cooking instructions as a single string",
+  "source": "URL or source if known, else null",
+  "ingredients": [
+    {{"name": "ingredient name (lowercase, common name)", "is_optional": false}},
+    ...
+  ]
+}}
+
+Rules:
+- ingredient names should be the base ingredient only (e.g. "garlic" not "3 cloves of garlic")
+- is_optional is true only if the recipe explicitly marks it optional or "to taste" garnishes
+- instructions should be complete but concise
+
+Recipe text:
+---
+{text}
+---
+"""
+
+_RATE_PROMPT = """You are rating a recipe for a kitchen assistant app.
+
+Recipe name: {name}
+Instructions:
+{instructions}
+
+Determine:
+1. difficulty — easy | medium | hard
+   easy: few steps, no special technique, beginner-friendly
+   medium: multiple steps, some timing or technique needed
+   hard: advanced technique, complex steps, requires experience
+
+2. prep_time — under_10 | 10_to_20 | over_20
+   Active hands-on preparation time only (exclude passive time like marinating or long simmering).
+   under_10: less than 10 minutes
+   10_to_20: 10 to 20 minutes
+   over_20: more than 20 minutes
+
+If the text doesn't provide enough detail, use your knowledge of this type of dish to estimate.
+
+Return ONLY valid JSON, no markdown:
+{{"difficulty": "easy|medium|hard", "prep_time": "under_10|10_to_20|over_20"}}
+"""
+
+
+class ParseUrlRequest(BaseModel):
+    url: str
+
+
+def _is_youtube(url: str) -> bool:
+    from urllib.parse import urlparse
+    return urlparse(url).hostname in _YOUTUBE_HOSTS
+
+
+def _fetch_web(url: str) -> str:
+    import requests
+    from bs4 import BeautifulSoup
+    in_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; KitchenBot/1.0)"}
+    resp = requests.get(url, headers=headers, timeout=20, verify=in_lambda)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header"]):
+        tag.decompose()
+    return soup.get_text(separator="\n", strip=True)[:8000]
+
+
+def _fetch_youtube(url: str) -> str:
+    # Try yt_dlp first (works outside Lambda/cloud IPs)
+    try:
+        import yt_dlp
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True, "nocheckcertificate": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        title = info.get("title", "")
+        desc = info.get("description", "")
+        if desc:
+            return f"Video title: {title}\n\n{desc}"[:8000]
+    except Exception:
+        pass
+
+    # Fallback: scrape page HTML — YouTube embeds full description in ytInitialPlayerResponse
+    import requests as _req, re, html as _html
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    resp = _req.get(url, headers=headers, timeout=20)
+    resp.raise_for_status()
+    page = resp.text
+
+    title_m = re.search(r'<title>([^<]+)</title>', page)
+    title = _html.unescape(title_m.group(1).replace(" - YouTube", "").strip()) if title_m else ""
+
+    desc_m = re.search(r'"shortDescription":"((?:[^"\\]|\\.)*)"', page)
+    if desc_m:
+        raw = desc_m.group(1)
+        desc = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace('\\\\', '\\')
+    else:
+        og_m = re.search(r'<meta name="description" content="([^"]*)"', page)
+        desc = _html.unescape(og_m.group(1)) if og_m else ""
+
+    if not desc:
+        raise ValueError("Could not extract description from YouTube page — channel may not include recipe text in the description")
+    return f"Video title: {title}\n\n{desc}"[:8000]
+
+
+@router.post("/parse-url")
+def parse_recipe_url(body: ParseUrlRequest):
+    """Fetch a recipe page or YouTube video and return parsed recipe data (does not save)."""
+    try:
+        text = _fetch_youtube(body.url) if _is_youtube(body.url) else _fetch_web(body.url)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
+
+    from tools.clients import sync_client
+
+    def _strip_md(raw: str) -> str:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return raw.strip()
+
+    def do_parse():
+        resp = sync_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=2048,
+            messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text)}],
+        )
+        return json.loads(_strip_md(resp.content[0].text))
+
+    def do_rate():
+        resp = sync_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=128,
+            messages=[{"role": "user", "content": _RATE_PROMPT.format(name="", instructions=text[:4000])}],
+        )
+        try:
+            r = json.loads(_strip_md(resp.content[0].text))
+            return {
+                "difficulty": r.get("difficulty") if r.get("difficulty") in {"easy", "medium", "hard"} else None,
+                "prep_time": r.get("prep_time") if r.get("prep_time") in {"under_10", "10_to_20", "over_20"} else None,
+            }
+        except Exception:
+            return {"difficulty": None, "prep_time": None}
+
+    # Both submitted simultaneously — true parallel Claude calls
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        parse_f = pool.submit(do_parse)
+        rate_f  = pool.submit(do_rate)
+        recipe  = parse_f.result()
+        rating  = rate_f.result()
+
+    # Rating prompt is dedicated and more reliable for difficulty/time
+    recipe["difficulty"] = rating.get("difficulty")
+    recipe["prep_time"]  = rating.get("prep_time")
+    if not recipe.get("source"):
+        recipe["source"] = body.url
+
+    return recipe
 
 
 @router.delete("/{recipe_id}")

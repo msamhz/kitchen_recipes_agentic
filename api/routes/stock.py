@@ -13,8 +13,10 @@ class StockUpsert(BaseModel):
 
 
 class StockPatch(BaseModel):
+    name: Optional[str] = None
     in_stock: Optional[int] = None
     expiry_date: Optional[str] = None
+    expiry_source: Optional[str] = None
     storage_location: Optional[str] = None
 
 
@@ -24,7 +26,7 @@ def list_stock():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, name, in_stock, expiry_date, storage_location, last_updated
+        SELECT id, name, in_stock, expiry_date, expiry_source, storage_location, last_updated
         FROM ingredients
         ORDER BY name
     """)
@@ -43,27 +45,30 @@ def upsert_stock(body: StockUpsert):
     for name in body.names:
         meta = (body.metadata or {}).get(name, {})
         expiry = meta.get("expiry_date")
+        expiry_source = meta.get("expiry_source")
         storage = meta.get("storage_location")
 
         if body.mode == "restock":
             cur.execute("""
-                INSERT INTO ingredients (name, in_stock, expiry_date, storage_location, last_updated)
-                VALUES (%s, 1, %s, %s, NOW()::TEXT)
+                INSERT INTO ingredients (name, in_stock, expiry_date, expiry_source, storage_location, last_updated)
+                VALUES (%s, 1, %s, %s, %s, NOW()::TEXT)
                 ON CONFLICT (name) DO UPDATE SET
                     in_stock         = 1,
                     expiry_date      = COALESCE(EXCLUDED.expiry_date, ingredients.expiry_date),
+                    expiry_source    = COALESCE(EXCLUDED.expiry_source, ingredients.expiry_source),
                     storage_location = COALESCE(EXCLUDED.storage_location, ingredients.storage_location),
                     last_updated     = NOW()::TEXT
-            """, (name, expiry, storage))
+            """, (name, expiry, expiry_source, storage))
         else:
             cur.execute("""
-                INSERT INTO ingredients (name, in_stock, expiry_date, storage_location, last_updated)
-                VALUES (%s, 1, %s, %s, NOW()::TEXT)
+                INSERT INTO ingredients (name, in_stock, expiry_date, expiry_source, storage_location, last_updated)
+                VALUES (%s, 1, %s, %s, %s, NOW()::TEXT)
                 ON CONFLICT (name) DO UPDATE SET
                     expiry_date      = COALESCE(EXCLUDED.expiry_date, ingredients.expiry_date),
+                    expiry_source    = COALESCE(EXCLUDED.expiry_source, ingredients.expiry_source),
                     storage_location = COALESCE(EXCLUDED.storage_location, ingredients.storage_location),
                     last_updated     = NOW()::TEXT
-            """, (name, expiry, storage))
+            """, (name, expiry, expiry_source, storage))
         upserted.append(name)
 
     conn.commit()
@@ -78,12 +83,21 @@ def patch_stock(ingredient_id: int, body: StockPatch):
     cur = conn.cursor()
 
     fields, values = [], []
+    if body.name is not None:
+        trimmed = body.name.strip().lower()
+        if not trimmed:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        fields.append("name = %s")
+        values.append(trimmed)
     if body.in_stock is not None:
         fields.append("in_stock = %s")
         values.append(body.in_stock)
     if body.expiry_date is not None:
         fields.append("expiry_date = %s")
         values.append(body.expiry_date)
+    if body.expiry_source is not None:
+        fields.append("expiry_source = %s")
+        values.append(body.expiry_source)
     if body.storage_location is not None:
         fields.append("storage_location = %s")
         values.append(body.storage_location)
@@ -94,10 +108,17 @@ def patch_stock(ingredient_id: int, body: StockPatch):
     fields.append("last_updated = NOW()::TEXT")
     values.append(ingredient_id)
 
-    cur.execute(
-        f"UPDATE ingredients SET {', '.join(fields)} WHERE id = %s",
-        values,
-    )
+    try:
+        cur.execute(
+            f"UPDATE ingredients SET {', '.join(fields)} WHERE id = %s",
+            values,
+        )
+    except Exception as e:
+        conn.close()
+        if "unique" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Name already exists")
+        raise HTTPException(status_code=500, detail=str(e))
+
     if cur.rowcount == 0:
         conn.close()
         raise HTTPException(status_code=404, detail="Ingredient not found")
@@ -105,6 +126,28 @@ def patch_stock(ingredient_id: int, body: StockPatch):
     conn.commit()
     conn.close()
     return {"updated": ingredient_id}
+
+
+class StockMarkUsed(BaseModel):
+    names: list[str]
+
+
+@router.post("/mark-used")
+def mark_used(body: StockMarkUsed):
+    """Mark a list of ingredient names as out of stock (used when cooking)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    updated = []
+    for name in body.names:
+        cur.execute(
+            "UPDATE ingredients SET in_stock = 0, last_updated = NOW()::TEXT WHERE name = %s",
+            (name,),
+        )
+        if cur.rowcount > 0:
+            updated.append(name)
+    conn.commit()
+    conn.close()
+    return {"updated": updated, "count": len(updated)}
 
 
 @router.delete("/{ingredient_id}")
