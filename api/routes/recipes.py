@@ -130,9 +130,13 @@ class RecipeCreate(BaseModel):
 
 @router.post("")
 def create_recipe(body: RecipeCreate):
-    """Add a new recipe with its ingredients."""
+    """Add a new recipe with its ingredients.
+    Ingredient names are normalised before saving to merge duplicates."""
+    from api.normalise import normalise_ingredient, get_index
+
     conn = get_connection()
     cur = conn.cursor()
+    index = get_index()
 
     cur.execute("""
         INSERT INTO recipes (name, instructions, difficulty, prep_time, source)
@@ -147,18 +151,31 @@ def create_recipe(body: RecipeCreate):
 
     cur.execute("DELETE FROM recipe_ingredients WHERE recipe_id = %s", (recipe_id,))
 
+    seen_ings: set[str] = set()
     for ing in body.ingredients:
+        canonical = normalise_ingredient(ing.name.strip().lower())
+        if canonical in seen_ings:
+            continue
+        seen_ings.add(canonical)
+
         cur.execute("""
             INSERT INTO ingredients (name, in_stock) VALUES (%s, 0)
             ON CONFLICT (name) DO NOTHING
-        """, (ing.name,))
-        cur.execute("SELECT id FROM ingredients WHERE name = %s", (ing.name,))
+        """, (canonical,))
+        cur.execute("SELECT id FROM ingredients WHERE name = %s", (canonical,))
         ing_id = cur.fetchone()["id"]
         cur.execute("""
             INSERT INTO recipe_ingredients (recipe_id, ingredient_id, is_optional)
             VALUES (%s, %s, %s)
             ON CONFLICT DO NOTHING
         """, (recipe_id, ing_id, 1 if ing.is_optional else 0))
+
+        # Persist embedding for new ingredients
+        if canonical not in index.names:
+            try:
+                index.embed_and_save(canonical)
+            except Exception:
+                pass
 
     conn.commit()
     conn.close()

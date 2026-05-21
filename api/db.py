@@ -72,6 +72,15 @@ def init_db():
         );
     """)
 
+    # Safe column migrations
+    for sql in [
+        "ALTER TABLE ingredients ADD COLUMN IF NOT EXISTS expiry_source TEXT",
+    ]:
+        try:
+            cur.execute(sql)
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
     print("[DB] Schema ready on Neon (ap-southeast-1)")

@@ -36,17 +36,28 @@ def list_stock():
 
 
 @router.post("/upsert")
-def upsert_stock(body: StockUpsert):
-    """Add or update ingredients after a scan confirmation."""
+async def upsert_stock(body: StockUpsert):
+    """Add or update ingredients after scan confirmation.
+    Names are normalised via vector similarity before saving to avoid duplicates."""
+    from api.normalise import normalise_ingredient, get_index
+
     conn = get_connection()
     cur = conn.cursor()
     upserted = []
+    seen: set[str] = set()
+    index = get_index()
 
-    for name in body.names:
-        meta = (body.metadata or {}).get(name, {})
-        expiry = meta.get("expiry_date")
+    for orig_name in body.names:
+        canonical = normalise_ingredient(orig_name.strip().lower())
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+
+        # Metadata is keyed by original name from the frontend; fall back to canonical
+        meta = (body.metadata or {}).get(orig_name) or (body.metadata or {}).get(canonical) or {}
+        expiry        = meta.get("expiry_date")
         expiry_source = meta.get("expiry_source")
-        storage = meta.get("storage_location")
+        storage       = meta.get("storage_location")
 
         if body.mode == "restock":
             cur.execute("""
@@ -58,7 +69,7 @@ def upsert_stock(body: StockUpsert):
                     expiry_source    = COALESCE(EXCLUDED.expiry_source, ingredients.expiry_source),
                     storage_location = COALESCE(EXCLUDED.storage_location, ingredients.storage_location),
                     last_updated     = NOW()::TEXT
-            """, (name, expiry, expiry_source, storage))
+            """, (canonical, expiry, expiry_source, storage))
         else:
             cur.execute("""
                 INSERT INTO ingredients (name, in_stock, expiry_date, expiry_source, storage_location, last_updated)
@@ -68,8 +79,16 @@ def upsert_stock(body: StockUpsert):
                     expiry_source    = COALESCE(EXCLUDED.expiry_source, ingredients.expiry_source),
                     storage_location = COALESCE(EXCLUDED.storage_location, ingredients.storage_location),
                     last_updated     = NOW()::TEXT
-            """, (name, expiry, expiry_source, storage))
-        upserted.append(name)
+            """, (canonical, expiry, expiry_source, storage))
+
+        # Persist embedding for new ingredients so future scans can match against them
+        if canonical not in index.names:
+            try:
+                index.embed_and_save(canonical)
+            except Exception:
+                pass
+
+        upserted.append(canonical)
 
     conn.commit()
     conn.close()
