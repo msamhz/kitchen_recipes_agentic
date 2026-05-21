@@ -20,6 +20,22 @@ class StockPatch(BaseModel):
     storage_location: Optional[str] = None
 
 
+@router.get("/normalise")
+def normalise_name(name: str):
+    """Vector-only check: returns canonical name if confident match exists (>= 0.85).
+    No LLM call — safe to invoke on every user blur event."""
+    from api.normalise import get_index, CONFIDENT
+    clean = name.strip().lower()
+    index = get_index()
+    result = index.find(clean)
+    return {
+        "input":     clean,
+        "canonical": result.match if result.zone == "confident" else clean,
+        "changed":   result.zone == "confident" and result.match != clean,
+        "score":     round(result.score, 3),
+    }
+
+
 @router.get("")
 def list_stock():
     """Return all ingredients with expiry and storage info."""

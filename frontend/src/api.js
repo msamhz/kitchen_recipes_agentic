@@ -78,6 +78,16 @@ export async function markUsed(names) {
   return res.json()
 }
 
+export async function normaliseName(name) {
+  try {
+    const res = await fetch(`${BASE}/stock/normalise?name=${encodeURIComponent(name)}`)
+    if (!res.ok) return { canonical: name, changed: false, score: 0 }
+    return res.json()
+  } catch {
+    return { canonical: name, changed: false, score: 0 }
+  }
+}
+
 export async function parseRecipeUrl(url) {
   const res = await fetch(`${BASE}/recipes/parse-url`, {
     method: 'POST',
