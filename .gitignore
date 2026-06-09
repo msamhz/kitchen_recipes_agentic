@@ -30,3 +30,4 @@ kitchen.db
 /logos
 MASTER_PROMPT.md
 REQUIREMENTS_INTAKE.md
+.claude/worktrees/
