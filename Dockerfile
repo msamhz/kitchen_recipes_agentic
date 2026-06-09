@@ -15,7 +15,7 @@ COPY pyproject.toml ./
 COPY src/ ./src/
 
 # Install the package and all its deps into a prefix we'll copy forward.
-RUN pip install --no-cache-dir --prefix=/install -e .
+RUN pip install --no-cache-dir --prefix=/install .
 
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
