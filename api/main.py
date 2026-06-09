@@ -1,10 +1,9 @@
 """
-Kitchen Agent — FastAPI entry point for Lambda deployment.
+Kitchen Agent — FastAPI entry point (uvicorn on Railway).
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from mangum import Mangum
 
 from api.routes import scan, stock, recipes
 
@@ -24,6 +23,3 @@ app.include_router(recipes.router, prefix="/recipes", tags=["recipes"])
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-# Lambda handler
-handler = Mangum(app)

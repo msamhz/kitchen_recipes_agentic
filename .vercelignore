@@ -1,0 +1,10 @@
+# Python backend — deployed on Railway, not Vercel
+# Leading / anchors each pattern to the repo root so frontend/src/ is NOT excluded.
+/api/
+/src/
+/tools/
+/archive/
+/tests/
+*.py
+/pyproject.toml
+/dev.sh

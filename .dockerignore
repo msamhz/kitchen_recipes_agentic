@@ -1,14 +1,47 @@
-.venv/
+# Version control & CI
 .git/
+.gitignore
+.github/
 .claude/
+
+# Python caches
 __pycache__/
 *.pyc
-*.db
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Virtual envs
+.venv/
+venv/
+
+# Secrets — never bake into image
 .env
-images/
-logos/
+.env.*
+!.env.example
+
+# Local dev / tooling artifacts
 .tmp/
+*.db
+*.sqlite
+
+# Frontend (built and deployed separately via Vercel)
+frontend/
+
+# Legacy / archive
+archive/
 app.py
+tools/
+
+# Large binary assets not needed at runtime
+logos/
+images/
 credentials.json
 token.json
-frontend/
+
+# AWS / Lambda artefacts (replaced by Railway)
+api/Dockerfile

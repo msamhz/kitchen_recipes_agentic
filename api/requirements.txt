@@ -1,5 +1,4 @@
 fastapi
-mangum
 uvicorn
 psycopg2-binary
 pgvector
