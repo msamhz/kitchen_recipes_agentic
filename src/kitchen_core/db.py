@@ -13,11 +13,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+
+def _get_database_url() -> str:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set. Add it to .env (see .env.example).")
+    return url
 
 
 def get_connection() -> psycopg2.extensions.connection:
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(_get_database_url())
     conn.cursor_factory = psycopg2.extras.RealDictCursor
     return conn
 
