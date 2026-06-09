@@ -1,5 +1,7 @@
 # Agent Instructions
 
+> **Operational source of truth:** `MASTER_PROMPT.md` governs how the agent team works (orchestration, block workflow, ownership lanes, roadmap). Where it overlaps with this file, `MASTER_PROMPT.md` wins. This file covers project facts, conventions, and the WAT philosophy.
+
 You're working inside the **WAT framework** (Workflows, Agents, Tools). This architecture separates concerns so that probabilistic AI handles reasoning while deterministic code handles execution. That separation is what makes this system reliable.
 
 ## The WAT Architecture
@@ -65,6 +67,80 @@ credentials.json, token.json  # Google OAuth (gitignored)
 ```
 
 **Core principle:** Local files are just for processing. Anything I need to see or use lives in cloud services. Everything in `.tmp/` is disposable.
+
+## Project Reality (read this before assuming WAT-only)
+
+The WAT framing above is the *philosophy*, but this project is a real product, not just `tools/` + `workflows/`. **Platform is migrating from AWS Lambda to Railway** (see `docs/platform-decision.md`); Neon and Vercel stay. Target shipped system:
+
+```
+Frontend (React PWA)          Backend (FastAPI on Railway)
+Vercel (static hosting)  →→→  Railway container (uvicorn) → Neon Postgres (+pgvector)
+```
+
+- **Frontend:** Vite + React + Tailwind, deployed on Vercel (`frontend/`).
+- **Backend:** FastAPI served by `uvicorn` in a container on **Railway** (`api/`). *(Currently still on Lambda + Mangum; migrates at block B4 — see `MASTER_PROMPT.md` §7. Mangum stays until Railway is verified.)*
+- **Database:** Neon Postgres, everywhere (local + prod), with `pgvector` for RAG. SQLite is being retired.
+- **AI:** Anthropic Claude (scan, parse, rate, recommend recipes).
+
+**Target architecture:** a shared, env-agnostic Python package **`kitchen_core`** (pyproject `name = "kitchen-agent"`, `pip install -e .`) that both `api/` and local entrypoints import — eliminating today's duplication (e.g. `tools/normalise.py` vs `api/normalise.py`). The NiceGUI `app.py` is being **archived**; the React PWA is the UI going forward. The **same `uvicorn` process runs locally and on Railway** — no Mangum/API-Gateway layer once migrated. See `MASTER_PROMPT.md` §5 for the full plan.
+
+## Repo Map
+
+```
+api/            FastAPI app (served by uvicorn on Railway; Mangum handler retired at B4); routes/
+frontend/       React PWA (src/pages, src/components, src/api.js); Vercel + Edge middleware (Basic Auth)
+kitchen_core/   Shared env-agnostic logic (PLANNED — normalise, embeddings, matching, shelf-life, etc.)
+tools/          Legacy Python scripts (being folded into kitchen_core)
+workflows/      Markdown SOPs (WAT)
+.claude/agents/ Dev-team agents: senior-swe, frontend-react-engineer, qa-tester, readme-architect
+.tmp/           Disposable temp files
+.env            Secrets — never commit; mirror every new var into .env.example
+```
+
+## The Dev Team
+
+Delegate to the right specialist (full briefs in `.claude/agents/`, workflow in `MASTER_PROMPT.md`):
+
+- **senior-swe** — backend, `kitchen_core`, infra glue. Owns `kitchen_core/`, `api/`, `tools/`, `pyproject.toml`, `dev.sh`.
+- **frontend-react-engineer** — UI/UX, FE state, perf; also **Lead Developer**. Owns `frontend/` only.
+- **qa-tester** — writes **and runs** tests for every block.
+- **readme-architect** — docs.
+
+SWE and FE work **in parallel** on non-overlapping file sets. QA tests each block. Work proceeds in **blocks** (small shippable units with explicit goals); see `MASTER_PROMPT.md` §3.
+
+## Commands
+
+```
+./dev.sh              # one-command local setup + run (venv + deps, npm install, uvicorn + vite)  [PLANNED]
+./dev.sh test         # run pytest + vitest + lint  [PLANNED]
+```
+Backend deploy — **target:** git push to Railway (Dockerfile runs uvicorn). **Until B4 migration completes:** still Lambda (build image → ECR → `aws lambda update-function-code --function-name kitchen-agent --region ap-southeast-1`). Frontend: `vercel --prod`.
+
+**Quality gate (must be green before deploy):** unit tests + lint + local build.
+
+## Conventions
+
+- Python **3.12**, Node **20**. Keep **Tailwind** (no new styling system without asking).
+- **Git:** one feature branch per block (`feature/<name>`); commit + push when the Lead Developer is satisfied (don't wait for the owner); the owner reviews at the **PR** stage.
+- **Secrets:** env vars only; every new variable must be added to `.env.example`.
+- **Local-first:** every change must leave the zero-cloud local flow working (mock Claude + local DB).
+
+## Non-Negotiables (do NOT change)
+
+- **Neon** stays the database; keep DB and compute **co-located in the same region**.
+- The live **Vercel URL** and its Edge **Basic Auth** middleware (frontend only repoints `VITE_API_URL`).
+- No hardcoded secrets — env only.
+- **Transition safety:** do not decommission Lambda until Railway is deployed and verified end-to-end.
+
+> Superseded by the Railway migration: the old Lambda locks (function name `kitchen-agent`, API Gateway, the Mangum handler, pinned `ap-southeast-1`) are intentionally retired. See `MASTER_PROMPT.md` §6.
+
+## Lessons & Gotchas (grow this as you learn)
+
+- **Why we're leaving Lambda:** API Gateway caps requests at ~29s (raisable, but Lambda still maxes at 15 min), cold starts reload the embedding model every time, and streaming/cron are awkward. **Railway** (long-lived container) removes all of these — no request-timeout ceiling, warm model, native cron/SSE. Migrate at block B4; until then the 29s cap still applies, so don't ship a long synchronous endpoint on Lambda.
+- **RAG lives in Neon via `pgvector`** — no separate vector DB needed; embeddings already exist (`embeddings.py`).
+- **Zero-cloud local dev** requires mocking Claude so devs don't burn paid API credits.
+- **Known duplication being removed:** `tools/normalise.py` vs `api/normalise.py`, and two DB layers — consolidate into `kitchen_core`.
+- *(Append new gotchas here whenever a session discovers a constraint, rate limit, or surprising behaviour — this is step 4 of the Self-Improvement Loop.)*
 
 ## Bottom Line
 
