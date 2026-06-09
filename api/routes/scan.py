@@ -5,9 +5,9 @@ import io
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from PIL import Image
 
-from tools.clients import async_client
-from tools.cv_to_ingredients import IDENTIFY_PROMPT, _parse_cv_response, _MAX_B64_BYTES
-from tools.shelf_life import get_default_expiry, get_storage_guess
+from kitchen_core.clients import async_client
+from kitchen_core.cv import IDENTIFY_PROMPT, parse_cv_response, _MAX_B64_BYTES
+from kitchen_core.shelf_life import get_default_expiry, get_storage_guess
 
 router = APIRouter()
 
@@ -45,7 +45,7 @@ async def _scan_one(raw: bytes) -> dict:
             ],
         }],
     )
-    return _parse_cv_response(response.content[0].text)
+    return parse_cv_response(response.content[0].text)
 
 
 @router.post("")
@@ -58,13 +58,9 @@ async def scan(files: list[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No images provided")
 
-    # Read all files into memory first
     raw_images = [await f.read() for f in files]
-
-    # Call Claude for all images in parallel
     results = await asyncio.gather(*[_scan_one(raw) for raw in raw_images])
 
-    # Deduplicate across images — first occurrence of a name wins (keeps its expiry date)
     seen: dict[str, dict] = {}
     for result in results:
         for item in result.get("ingredients", []):
@@ -72,7 +68,6 @@ async def scan(files: list[UploadFile] = File(...)):
             if name and name not in seen:
                 seen[name] = item
 
-    # Build candidates with storage guess and expiry fallback from shelf-life KB
     candidates = []
     for name, item in seen.items():
         if item.get("confidence", "low") == "low":

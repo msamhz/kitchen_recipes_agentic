@@ -1,30 +1,17 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-from api.db import get_connection
+
+from kitchen_core.db import get_connection
+from kitchen_core.ingredient_index import get_index, CONFIDENT
+from kitchen_core.normalise import normalise_ingredient
+from kitchen_core.schemas import StockUpsert, StockPatch, StockMarkUsed
 
 router = APIRouter()
-
-
-class StockUpsert(BaseModel):
-    names: list[str]
-    mode: str = "update"           # "update" | "restock"
-    metadata: Optional[dict] = {}  # {name: {expiry_date, storage_location}}
-
-
-class StockPatch(BaseModel):
-    name: Optional[str] = None
-    in_stock: Optional[int] = None
-    expiry_date: Optional[str] = None
-    expiry_source: Optional[str] = None
-    storage_location: Optional[str] = None
 
 
 @router.get("/normalise")
 def normalise_name(name: str):
     """Vector-only check: returns canonical name if confident match exists (>= 0.85).
     No LLM call — safe to invoke on every user blur event."""
-    from api.normalise import get_index, CONFIDENT
     clean = name.strip().lower()
     index = get_index()
     result = index.find(clean)
@@ -55,8 +42,6 @@ def list_stock():
 async def upsert_stock(body: StockUpsert):
     """Add or update ingredients after scan confirmation.
     Names are normalised via vector similarity before saving to avoid duplicates."""
-    from api.normalise import normalise_ingredient, get_index
-
     conn = get_connection()
     cur = conn.cursor()
     upserted = []
@@ -69,7 +54,6 @@ async def upsert_stock(body: StockUpsert):
             continue
         seen.add(canonical)
 
-        # Metadata is keyed by original name from the frontend; fall back to canonical
         meta = (body.metadata or {}).get(orig_name) or (body.metadata or {}).get(canonical) or {}
         expiry        = meta.get("expiry_date")
         expiry_source = meta.get("expiry_source")
@@ -97,7 +81,6 @@ async def upsert_stock(body: StockUpsert):
                     last_updated     = NOW()::TEXT
             """, (canonical, expiry, expiry_source, storage))
 
-        # Persist embedding for new ingredients so future scans can match against them
         if canonical not in index.names:
             try:
                 index.embed_and_save(canonical)
@@ -161,10 +144,6 @@ def patch_stock(ingredient_id: int, body: StockPatch):
     conn.commit()
     conn.close()
     return {"updated": ingredient_id}
-
-
-class StockMarkUsed(BaseModel):
-    names: list[str]
 
 
 @router.post("/mark-used")
