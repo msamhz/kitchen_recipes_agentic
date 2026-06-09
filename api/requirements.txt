@@ -1,6 +1,9 @@
 fastapi
 mangum
+uvicorn
 psycopg2-binary
+pgvector
+httpx
 anthropic
 sentence-transformers
 optimum[onnxruntime]
