@@ -27,6 +27,7 @@ def init_db():
     cur = conn.cursor()
 
     cur.execute("CREATE EXTENSION IF NOT EXISTS citext;")
+    cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ingredients (
@@ -34,7 +35,7 @@ def init_db():
             name             CITEXT NOT NULL UNIQUE,
             in_stock         INTEGER NOT NULL DEFAULT 1,
             last_updated     TEXT NOT NULL DEFAULT NOW()::TEXT,
-            embedding        BYTEA,
+            embedding        BYTEA,  -- TODO B5: migrate to vector(384) for pgvector ANN search
             expiry_date      TEXT,
             storage_location TEXT
         );
