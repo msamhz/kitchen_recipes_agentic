@@ -1,0 +1,9 @@
+# Python backend — deployed on Railway, not Vercel
+api/
+src/
+tools/
+archive/
+tests/
+*.py
+pyproject.toml
+dev.sh
