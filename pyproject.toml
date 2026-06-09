@@ -11,7 +11,6 @@ dependencies = [
     "beautifulsoup4",
     "fastapi",
     "httpx",
-    "mangum",
     "numpy",
     "optimum[onnxruntime]",
     "Pillow",
