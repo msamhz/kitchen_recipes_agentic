@@ -13,6 +13,7 @@ output
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Secrets
 .env

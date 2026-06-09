@@ -1,14 +1,12 @@
 """
-Postgres connection and schema init for Lambda/Neon deployment.
+Postgres connection and schema init for Neon deployment.
 
-Separate from tools/db_init.py (SQLite) so the local NiceGUI app
-keeps working while this branch builds the API layer.
-
-Run once to create all tables in Neon:
-    python api/db.py
+Run once to create all tables:
+    python -c "from kitchen_core.db import init_db; init_db()"
 """
 
 import os
+
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
@@ -28,7 +26,6 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # citext gives case-insensitive text columns (replaces SQLite's COLLATE NOCASE)
     cur.execute("CREATE EXTENSION IF NOT EXISTS citext;")
 
     cur.execute("""
@@ -72,7 +69,6 @@ def init_db():
         );
     """)
 
-    # Safe column migrations
     for sql in [
         "ALTER TABLE ingredients ADD COLUMN IF NOT EXISTS expiry_source TEXT",
     ]:
@@ -83,8 +79,4 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print("[DB] Schema ready on Neon (ap-southeast-1)")
-
-
-if __name__ == "__main__":
-    init_db()
+    print("[DB] Schema ready on Neon")

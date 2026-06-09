@@ -1,18 +1,22 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-from datetime import date
+import concurrent.futures
 import json
 import os
-import concurrent.futures
-from api.db import get_connection
+
+from fastapi import APIRouter, HTTPException
+from datetime import date
+
+from kitchen_core.clients import sync_client
+from kitchen_core.db import get_connection
+from kitchen_core.ingredient_index import get_index
+from kitchen_core.normalise import normalise_ingredient
+from kitchen_core.schemas import RecipeCreate, ParseUrlRequest
 
 router = APIRouter()
 
-_URGENCY_EXPIRED          = 1000
-_URGENCY_3_DAYS           = 50
-_URGENCY_7_DAYS           = 20
-_URGENCY_14_DAYS          = 5
+_URGENCY_EXPIRED            = 1000
+_URGENCY_3_DAYS             = 50
+_URGENCY_7_DAYS             = 20
+_URGENCY_14_DAYS            = 5
 _URGENCY_PERISHABLE_NO_DATE = 2
 
 
@@ -41,7 +45,6 @@ def get_recipes():
     recipes = cur.fetchall()
 
     can_cook, can_shop = [], []
-    today = date.today().isoformat()
 
     for recipe in recipes:
         rid = recipe["id"]
@@ -114,26 +117,10 @@ def get_recipes():
     return {"can_cook": can_cook, "can_shop": can_shop}
 
 
-class RecipeIngredient(BaseModel):
-    name: str
-    is_optional: bool = False
-
-
-class RecipeCreate(BaseModel):
-    name: str
-    instructions: str
-    difficulty: Optional[str] = None
-    prep_time: Optional[str] = None
-    source: Optional[str] = None
-    ingredients: list[RecipeIngredient]
-
-
 @router.post("")
 def create_recipe(body: RecipeCreate):
     """Add a new recipe with its ingredients.
     Ingredient names are normalised before saving to merge duplicates."""
-    from api.normalise import normalise_ingredient, get_index
-
     conn = get_connection()
     cur = conn.cursor()
     index = get_index()
@@ -170,7 +157,6 @@ def create_recipe(body: RecipeCreate):
             ON CONFLICT DO NOTHING
         """, (recipe_id, ing_id, 1 if ing.is_optional else 0))
 
-        # Persist embedding for new ingredients
         if canonical not in index.names:
             try:
                 index.embed_and_save(canonical)
@@ -184,12 +170,10 @@ def create_recipe(body: RecipeCreate):
 
 @router.get("/shopping-list")
 def get_shopping_list():
-    """Return missing required ingredients with raw pairs for client-side filtering.
-    All recipes are returned as filter options; pairs only cover missing ingredients."""
+    """Return missing required ingredients with raw pairs for client-side filtering."""
     conn = get_connection()
     cur = conn.cursor()
 
-    # Raw pairs: only missing required ingredients (aliases respected)
     cur.execute("""
         SELECT i.name AS ingredient, r.id AS recipe_id, r.name AS recipe_name
         FROM recipes r
@@ -206,7 +190,6 @@ def get_shopping_list():
     """)
     pairs = [dict(r) for r in cur.fetchall()]
 
-    # ALL recipes as filter options (not just can_shop)
     cur.execute("SELECT id, name FROM recipes ORDER BY name")
     recipes = [dict(r) for r in cur.fetchall()]
 
@@ -248,25 +231,11 @@ Instructions:
 
 Determine:
 1. difficulty — easy | medium | hard
-   easy: few steps, no special technique, beginner-friendly
-   medium: multiple steps, some timing or technique needed
-   hard: advanced technique, complex steps, requires experience
-
 2. prep_time — under_10 | 10_to_20 | over_20
-   Active hands-on preparation time only (exclude passive time like marinating or long simmering).
-   under_10: less than 10 minutes
-   10_to_20: 10 to 20 minutes
-   over_20: more than 20 minutes
-
-If the text doesn't provide enough detail, use your knowledge of this type of dish to estimate.
 
 Return ONLY valid JSON, no markdown:
 {{"difficulty": "easy|medium|hard", "prep_time": "under_10|10_to_20|over_20"}}
 """
-
-
-class ParseUrlRequest(BaseModel):
-    url: str
 
 
 def _is_youtube(url: str) -> bool:
@@ -288,7 +257,6 @@ def _fetch_web(url: str) -> str:
 
 
 def _fetch_youtube(url: str) -> str:
-    # Try yt_dlp first (works outside Lambda/cloud IPs)
     try:
         import yt_dlp
         opts = {"quiet": True, "no_warnings": True, "skip_download": True, "nocheckcertificate": True}
@@ -301,8 +269,9 @@ def _fetch_youtube(url: str) -> str:
     except Exception:
         pass
 
-    # Fallback: scrape page HTML — YouTube embeds full description in ytInitialPlayerResponse
-    import requests as _req, re, html as _html
+    import requests as _req
+    import re
+    import html as _html
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -323,7 +292,7 @@ def _fetch_youtube(url: str) -> str:
         desc = _html.unescape(og_m.group(1)) if og_m else ""
 
     if not desc:
-        raise ValueError("Could not extract description from YouTube page — channel may not include recipe text in the description")
+        raise ValueError("Could not extract description from YouTube page")
     return f"Video title: {title}\n\n{desc}"[:8000]
 
 
@@ -334,8 +303,6 @@ def parse_recipe_url(body: ParseUrlRequest):
         text = _fetch_youtube(body.url) if _is_youtube(body.url) else _fetch_web(body.url)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
-
-    from tools.clients import sync_client
 
     def _strip_md(raw: str) -> str:
         raw = raw.strip()
@@ -366,14 +333,12 @@ def parse_recipe_url(body: ParseUrlRequest):
         except Exception:
             return {"difficulty": None, "prep_time": None}
 
-    # Both submitted simultaneously — true parallel Claude calls
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         parse_f = pool.submit(do_parse)
         rate_f  = pool.submit(do_rate)
         recipe  = parse_f.result()
         rating  = rate_f.result()
 
-    # Rating prompt is dedicated and more reliable for difficulty/time
     recipe["difficulty"] = rating.get("difficulty")
     recipe["prep_time"]  = rating.get("prep_time")
     if not recipe.get("source"):
